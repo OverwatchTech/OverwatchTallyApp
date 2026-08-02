@@ -17,6 +17,16 @@ Conventions:
   on every mutable table (not repeated below).
 - Enums are Postgres enums; adding a value is a migration, which is the point.
 
+> **Implementation deviations (Phase 1, recorded here on landing):**
+> 1. The member-role JWT claim is **`member_role`**, not `role` — Supabase
+>    reserves the standard `role` claim for `anon`/`authenticated`.
+> 2. Idempotency lives in **`ingest_event_ids`** (small, unpartitioned,
+>    60-day retention), not in a unique index on the partitioned tables:
+>    partitioned uniques must include the partition key, and a replayed MDP
+>    event arrives with a *new* `received_at`, so such an index could never
+>    catch a replay. The webhook inserts the eventID there first with
+>    `ON CONFLICT DO NOTHING`; conflict = replay = drop.
+
 ## RLS pattern
 
 ```sql
