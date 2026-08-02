@@ -6,11 +6,12 @@ The marketing site is a separate repo on the apex domain; the portal must read
 as its continuation — same voice, same type, inverted (dark) surface.
 
 Authoritative design docs: `docs/ARCHITECTURE.md`, `docs/DATA-MODEL.md`,
-`docs/ROADMAP.md`. When this file and the docs disagree, stop and ask.
+`docs/PHASES.md`, `docs/ROADMAP.md`. When this file and the docs disagree,
+stop and ask.
 
 ## Working agreement
 
-- Build in phases (Part Six of the brief). **Stop at the end of every phase**:
+- Build in phases (`docs/PHASES.md`). **Stop at the end of every phase**:
   summarize what was built, what was deferred, and what the owner must do
   manually. Wait for explicit go-ahead.
 - Ask before adding any dependency not named in the brief.
@@ -59,9 +60,9 @@ Authoritative design docs: `docs/ARCHITECTURE.md`, `docs/DATA-MODEL.md`,
    queries. `service_role` exists in exactly two places: `mdp-webhook` and
    `stripe-webhook` edge functions — never in `apps/web`. JWT custom claims
    (`org_id`, `role`, staff `platform_role`) drive policies via `auth.jwt()`;
-   never trust a client-supplied tenant parameter. Secrets go in `.env.local`
-   or platform secret storage — never committed, never logged. No PII or farm
-   identifiers in URL query strings.
+   never trust a client-supplied tenant parameter. Secrets go in
+   `apps/web/.env.local` or platform secret storage — never committed, never
+   logged. No PII or farm identifiers in URL query strings.
 10. **Ingest discipline** (full list in ARCHITECTURE §ingest): persist the raw
     envelope before parsing; idempotent on `eventID`; unknown DevEUI is logged
     and dropped, never auto-created; return 2xx fast; dead-letter what fails.
@@ -102,7 +103,7 @@ pnpm install        # workspace install
 pnpm dev            # apps/web dev server
 pnpm test           # vitest across packages
 pnpm e2e            # playwright
-pnpm db:types       # regenerate Supabase types into packages/db
+pnpm db:types       # regenerate Supabase types into packages/db (arrives in Phase 1)
 ```
 
-(Defined during Phase 0 scaffolding; keep this section current.)
+(Keep this section current as phases land.)

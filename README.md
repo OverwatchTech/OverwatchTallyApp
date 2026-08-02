@@ -15,7 +15,9 @@ pnpm e2e          # playwright (apps/web)
 pnpm build
 ```
 
-Copy `.env.example` → `.env.local` and fill per phase. Never commit secrets.
+Copy `.env.example` → `apps/web/.env.local` and fill per phase (Next.js reads
+env files from the app directory, not the repo root). Edge-function secrets go
+via `supabase secrets set`, never in the app. Never commit secrets.
 
 ## Layout
 

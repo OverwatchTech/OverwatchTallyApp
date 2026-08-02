@@ -11,6 +11,10 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@overwatch/db": "workspace:*",
+    "@overwatch/forecast": "workspace:*",
+    "@overwatch/normalize": "workspace:*",
+    "@overwatch/ui": "workspace:*",
     "next": "15.5.22",
     "react": "19.1.0",
     "react-dom": "19.1.0"
@@ -19,7 +23,7 @@
     "@eslint/eslintrc": "^3",
     "@playwright/test": "^1.56.1",
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
