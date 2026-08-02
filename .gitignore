@@ -1,0 +1,26 @@
+# credentials — never committed (working agreement)
+Milesight.txt
+.env
+.env.*
+!.env.example
+
+# deps + build output
+node_modules/
+.next/
+out/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# test artifacts
+coverage/
+playwright-report/
+test-results/
+
+# python (services/segment)
+__pycache__/
+.venv/
+
+# os
+.DS_Store
+Thumbs.db
