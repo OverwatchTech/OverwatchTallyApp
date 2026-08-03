@@ -1,8 +1,10 @@
 // @overwatch/ui — shared components + design tokens.
 // The semantic color rule lives here (see CLAUDE.md #4): hay = projections
 // only, water = liquid only, alert = actually wrong only, teal = live/action.
-// formatMeasure() — the ONLY place SI converts to US customary — lands here
-// in Phase 1 alongside the token sheet.
+// formatMeasure() — the ONLY place SI converts to US customary — lives in
+// ./format-measure.
+
+export { formatMeasure, type SiUnit } from './format-measure';
 
 export const PACKAGE = '@overwatch/ui' as const;
 
