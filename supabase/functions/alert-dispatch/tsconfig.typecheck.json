@@ -1,0 +1,20 @@
+{
+  // Verification-only config: `npx tsc -p supabase/functions/alert-dispatch/tsconfig.typecheck.json`
+  // type-checks the function on machines without Deno (see README §verify).
+  // Deno/the Supabase bundler never read this file.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["./*.ts", "./deno_shim.d.ts"]
+}
