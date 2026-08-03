@@ -70,10 +70,13 @@ const EVENT_ID = /^[\x21-\x7e]{1,128}$/;
 // eventType / data.type: MDP's vocabulary is UPPER_SNAKE.
 const EVENT_TYPE = /^[A-Z][A-Z_]{0,63}$/;
 const DATA_TYPE = /^[A-Z][A-Z_]{0,31}$/;
-// devEUI: hex only (LoRaWAN EUI-64 is 16 hex chars; bounds are generous).
-// Hex-only also guarantees no `%`/`_` wildcards reach the case-insensitive
-// device lookup filter.
-const DEV_EUI = /^[0-9A-Fa-f]{8,32}$/;
+// devEUI: hex for real hardware (LoRaWAN EUI-64 is 16 hex chars; bounds are
+// generous). OBSERVED 2026-08-03: MDP's virtual/demo devices report a
+// non-hex identifier of the form `DEMO_<digits>`, so that shape is admitted
+// explicitly rather than by loosening the character class. Alphanumerics
+// only either way — the device lookup uses `eq` (see index.ts), so no LIKE
+// wildcard can reach the filter.
+const DEV_EUI = /^(?:DEMO_[0-9]{8,32}|[0-9A-Fa-f]{8,32})$/;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);

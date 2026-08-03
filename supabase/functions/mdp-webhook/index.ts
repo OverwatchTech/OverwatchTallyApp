@@ -395,14 +395,16 @@ async function normalizeDeviceData(ctx: ProcessCtx): Promise<void> {
     return;
   }
 
-  // §5.1 — devEUI must already exist in `devices` for THIS farm. The devEUI
-  // is validated hex, so the case-insensitive equality filter (ilike without
-  // wildcards) is safe. Unknown ⇒ log + count + drop. NEVER auto-created:
-  // devices exist only through the installer workflow (CLAUDE.md #12).
+  // §5.1 — devEUI must already exist in `devices` for THIS farm. Matched with
+  // `eq` on the upper-cased value, so no LIKE wildcard semantics apply: MDP's
+  // demo devices carry an `_` in their identifier, which ILIKE would treat as
+  // a single-character wildcard. Provisioning MUST store dev_eui upper-cased.
+  // Unknown ⇒ log + count + drop. NEVER auto-created: devices exist only
+  // through the installer workflow (CLAUDE.md #12).
   const device = await pg().selectOne<{ id: string }>('devices', {
     select: 'id',
     farm_id: `eq.${ctx.farmId}`,
-    dev_eui: `ilike.${result.devEUI}`,
+    dev_eui: `eq.${result.devEUI.toUpperCase()}`,
   });
   if (device === null) {
     counters.unknownDevEui += 1;
