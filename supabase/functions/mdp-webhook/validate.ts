@@ -34,7 +34,13 @@ export interface MdpDeviceData {
  * `raw_events.envelope` stores the envelope verbatim.
  */
 export interface MdpEnvelope {
-  readonly eventID: string;
+  /**
+   * OBSERVED 2026-08-03: live MDP callbacks send `eventId` (lowercase d), not
+   * the `eventID` the documentation shows. Both are accepted; `eventId()` below
+   * is the reader. The raw envelope is persisted verbatim either way.
+   */
+  readonly eventID?: string;
+  readonly eventId?: string;
   /** Unix SECONDS as sent by MDP (string in captures; bare number tolerated). */
   readonly eventCreatedTime: string | number;
   readonly eventVersion?: string;
@@ -45,11 +51,7 @@ export interface MdpEnvelope {
 
 export type ValidationReason =
   | 'body_not_object'
-  // [VERIFY] MDP's Device Debug Panel supports "batched" simulated reports
-  // (§4.3). If batching arrives as a JSON array of envelopes, this reason will
-  // surface immediately in the live test and the validator grows a loop.
-  // Until observed, arrays are rejected rather than guessed at.
-  | 'body_is_array'
+  | 'empty_batch'
   | 'bad_event_id'
   | 'bad_event_created_time'
   | 'bad_event_type'
@@ -90,11 +92,20 @@ function unixSecondsToIso(v: unknown): string | null {
   return new Date(secs * 1000).toISOString();
 }
 
+/**
+ * OBSERVED 2026-08-03: MDP posts a JSON ARRAY of envelopes — a single reading
+ * arrives as a one-element batch. Splits a body into envelopes to validate
+ * individually; a non-array body is treated as a batch of one.
+ */
+export function envelopeBatch(body: unknown): unknown[] | null {
+  if (Array.isArray(body)) return body.length === 0 ? null : body;
+  return [body];
+}
+
 export function validateEnvelope(body: unknown): ValidationResult {
-  if (Array.isArray(body)) return { ok: false, reason: 'body_is_array' };
   if (!isPlainObject(body)) return { ok: false, reason: 'body_not_object' };
 
-  const eventID = body['eventID'];
+  const eventID = body['eventId'] ?? body['eventID'];
   if (typeof eventID !== 'string' || !EVENT_ID.test(eventID)) {
     return { ok: false, reason: 'bad_event_id' };
   }
@@ -143,9 +154,17 @@ export function validateEnvelope(body: unknown): ValidationResult {
   };
 }
 
-/** Typed accessor for the data block — non-null iff eventType is DEVICE_DATA. */
+/** The envelope's id, from whichever spelling MDP used. */
+export function eventIdOf(envelope: MdpEnvelope): string {
+  return (envelope.eventId ?? envelope.eventID) as string;
+}
+
+/**
+ * Typed accessor for the data block — non-null iff eventType is DEVICE_DATA
+ * AND `data` is object-shaped. WEBHOOK_TEST sends `data` as a plain string
+ * ("Test Milesight Webhook Successfully."), so the object check is load-bearing.
+ */
 export function deviceData(envelope: MdpEnvelope): MdpDeviceData | null {
-  return envelope.eventType === 'DEVICE_DATA'
-    ? (envelope.data as MdpDeviceData)
-    : null;
+  if (envelope.eventType !== 'DEVICE_DATA') return null;
+  return isPlainObject(envelope.data) ? (envelope.data as unknown as MdpDeviceData) : null;
 }

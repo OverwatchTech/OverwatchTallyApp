@@ -27,8 +27,9 @@
 //   400 malformed envelope     405 not POST          413 body too large
 //   429 rate limited           500 raw persist failed (MDP should retry)
 
-import { MilesightMdpSource, type TelemetrySource } from './source.ts';
-import type { MdpEnvelope } from './validate.ts';
+import { MilesightMdpSource, type ParsedIngest, type TelemetrySource } from './source.ts';
+import { envelopeBatch, type MdpEnvelope } from './validate.ts';
+import { signatureMaterial, verifySignature } from './signature.ts';
 import { normalizeEnvelope } from './normalize_seam.ts';
 import { SlidingWindowRateLimiter } from './rate_limit.ts';
 import { PgError, PostgrestClient } from './pg.ts';
@@ -65,6 +66,7 @@ const counters = {
   unknownDevEui: 0,
   rateLimited: 0,
   deadLettered: 0,
+  badSignature: 0,
 };
 
 let client: PostgrestClient | null = null;
@@ -135,6 +137,14 @@ function scheduleBackground(work: Promise<void>): void {
 // ── request handling ────────────────────────────────────────────────────────
 
 async function handleRequest(req: Request): Promise<Response> {
+  // MDP validates a callback URI with a non-POST preflight before it will
+  // accept it — its Test button reports "the callback URI is invalid" when we
+  // answer 405. Ack liveness probes with an empty 200 WITHOUT looking the
+  // token up: an unconditional ack leaks nothing, where a token-dependent
+  // answer would make the endpoint a token oracle.
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+    return empty(200);
+  }
   if (req.method !== 'POST') return empty(405);
 
   const token = tokenFromPath(new URL(req.url).pathname);
@@ -167,15 +177,29 @@ async function handleRequest(req: Request): Promise<Response> {
     return empty(400);
   }
 
-  // §5.1 ordering guarantee: envelope shape is validated BEFORE the first
-  // database touch (the farm lookup below).
-  const parseResult = source.parse(body);
-  if (!parseResult.ok) {
+  // OBSERVED 2026-08-03: MDP posts a JSON ARRAY of envelopes; a single reading
+  // arrives as a one-element batch. Each element is validated independently so
+  // one malformed sibling cannot discard a whole delivery.
+  const batch = envelopeBatch(body);
+  if (batch === null) {
     counters.rejectedEnvelope += 1;
-    log({ evt: 'reject', reason: parseResult.reason, source: source.name, token: tokenPrefix(token) });
+    log({ evt: 'reject', reason: 'empty_batch', token: tokenPrefix(token) });
     return empty(400);
   }
-  const { sourceEventId, eventType, eventCreatedTime, envelope } = parseResult.parsed;
+
+  // §5.1 ordering guarantee: envelope shape is validated BEFORE the first
+  // database touch (the farm lookup below).
+  const parsed: ParsedIngest<MdpEnvelope>[] = [];
+  for (const item of batch) {
+    const result = source.parse(item);
+    if (result.ok) {
+      parsed.push(result.parsed);
+    } else {
+      counters.rejectedEnvelope += 1;
+      log({ evt: 'reject', reason: result.reason, source: source.name, token: tokenPrefix(token) });
+    }
+  }
+  if (parsed.length === 0) return empty(400);
 
   // Resolve the farm by its webhook token. No status gating: ingest continues
   // even for past-due/canceled farms — never drop data over a card
@@ -190,10 +214,62 @@ async function handleRequest(req: Request): Promise<Response> {
     return empty(404);
   }
 
+  // Signature verification (see signature.ts). MDP signs every delivery; the
+  // path token stays as defence in depth. A farm with no stored credentials
+  // yet is accepted unsigned and logged loudly — provisioning writes the
+  // secret, and refusing data before that would drop real readings on the
+  // floor during install.
+  const material = signatureMaterial(req.headers);
+  const creds = await pg().selectOne<{ webhook_secret: string; webhook_uuid: string }>(
+    'mdp_webhook_credentials',
+    { select: 'webhook_secret,webhook_uuid', farm_id: `eq.${farm.id}` },
+  );
+  if (creds === null) {
+    log({ evt: 'signature_skipped', reason: 'no_credentials_stored', farmId: farm.id });
+  } else if (material === null) {
+    counters.badSignature += 1;
+    log({ evt: 'reject', reason: 'signature_headers_missing', farmId: farm.id });
+    return empty(401);
+  } else if (material.uuid !== creds.webhook_uuid) {
+    counters.badSignature += 1;
+    log({ evt: 'reject', reason: 'webhook_uuid_mismatch', farmId: farm.id });
+    return empty(401);
+  } else {
+    const verdict = await verifySignature(
+      material,
+      creds.webhook_secret,
+      Math.floor(Date.now() / 1000),
+    );
+    if (!verdict.ok) {
+      counters.badSignature += 1;
+      log({ evt: 'reject', reason: verdict.reason, farmId: farm.id });
+      return empty(401);
+    }
+  }
+
   // §5.6 — received_at is minted server-side, once, at receipt; every row
-  // written for this event (raw_events, readings, device_health) carries this
-  // exact instant. event_created_time (envelope clock) is stored beside it.
+  // written for this delivery carries this exact instant. event_created_time
+  // (envelope clock) is stored beside it.
   const receivedAt = new Date().toISOString();
+
+  let accepted = 0;
+  for (const item of parsed) {
+    const outcome = await ingestOne(farm, item, receivedAt);
+    if (outcome === 'persist_failed') return empty(500);
+    if (outcome === 'accepted') accepted += 1;
+  }
+  return empty(200);
+}
+
+type IngestOutcome = 'accepted' | 'replay' | 'persist_failed';
+
+/** Dedup → raw persist → schedule normalization, for one envelope. */
+async function ingestOne(
+  farm: { id: string; org_id: string },
+  item: ParsedIngest<MdpEnvelope>,
+  receivedAt: string,
+): Promise<IngestOutcome> {
+  const { sourceEventId, eventType, eventCreatedTime, envelope } = item;
 
   // §5.2 — the dedup gate. Partitioned tables cannot hold this unique
   // constraint (a replay arrives with a NEW received_at — migration 0003
@@ -207,7 +283,7 @@ async function handleRequest(req: Request): Promise<Response> {
   if (gate.length === 0) {
     counters.replays += 1;
     log({ evt: 'replay_dropped', eventId: sourceEventId, farmId: farm.id, total: counters.replays });
-    return empty(200);
+    return 'replay';
   }
 
   // §5.3 — raw BEFORE parse. MDP retains at most one day: an event we fail to
@@ -249,7 +325,7 @@ async function handleRequest(req: Request): Promise<Response> {
       farmId: farm.id,
       error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
     });
-    return empty(500);
+    return 'persist_failed';
   }
 
   // §5.5 — the event is durable; acknowledge now, normalize after the
@@ -268,7 +344,7 @@ async function handleRequest(req: Request): Promise<Response> {
       envelope,
     }),
   );
-  return empty(200);
+  return 'accepted';
 }
 
 // ── post-response processing ────────────────────────────────────────────────

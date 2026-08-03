@@ -50,8 +50,12 @@ export interface MdpDeviceData {
 }
 
 export interface MdpEnvelope {
-  /** Idempotency key — unique per delivery (§5.2). */
-  eventID: string;
+  /**
+   * Idempotency key — unique per delivery (§5.2). Documented as `eventID`;
+   * live callbacks (observed 2026-08-03) send `eventId`. Either is accepted.
+   */
+  eventID?: string;
+  eventId?: string;
   /**
    * Unix **seconds** (§4.2). The documented example carries it as a JSON
    * string ("1742872448"); tolerate a bare number defensively.

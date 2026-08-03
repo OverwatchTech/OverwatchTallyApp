@@ -156,8 +156,27 @@ hands-on sensor setup; never promise zero-touch sensor provisioning.
 
 Hard requirements:
 
-1. **No signature exists on MDP webhooks** (HTTPS + valid cert is the only
-   documented requirement). Compensate:
+0. **CORRECTION (verified 2026-08-03 against a live callback).** Three claims
+   below, taken from Milesight's documentation, are wrong on the wire:
+   - **Webhooks ARE signed.** Every delivery carries `x-msc-webhook-uuid`,
+     `x-msc-request-nonce`, `x-msc-request-timestamp`, and
+     `x-msc-request-signature` = hex `HMAC-SHA256(webhook_secret,
+     timestamp || nonce)`. Verified by reproducing the digest. The function
+     now verifies it (`signature.ts`, credentials in
+     `mdp_webhook_credentials`, staff-only). The signature covers the
+     timestamp and nonce only — **not the body** — so it authenticates the
+     sender, not the message; freshness window + eventId idempotency + the
+     path token carry the rest.
+   - **The body is a JSON ARRAY.** A single reading arrives as a one-element
+     batch. Each element is validated independently.
+   - **The id field is `eventId`**, not the documented `eventID`. Both are
+     accepted; `eventId` is what real deliveries send.
+   Also observed: `data` is a plain string on `WEBHOOK_TEST`, and MDP will
+   not accept a callback URI whose endpoint answers non-POST probes with
+   405 — the function returns 200 to GET/HEAD/OPTIONS.
+
+1. **No signature exists on MDP webhooks** — SUPERSEDED by item 0; the
+   compensating controls below remain in force as defence in depth:
    - One long random path token per farm: `/mdp-webhook/{farm_token}`;
      treated as a secret, rotatable from the admin console.
    - Reject any `devEUI` not present in `devices` for that farm — logged and

@@ -17,7 +17,7 @@
 // brings its own envelope type and its own normalize function behind the same
 // call shape in index.ts.
 
-import { validateEnvelope, type MdpEnvelope } from './validate.ts';
+import { eventIdOf, validateEnvelope, type MdpEnvelope } from './validate.ts';
 
 /** What every source must distill an incoming request body into. */
 export interface ParsedIngest<E> {
@@ -51,7 +51,7 @@ export class MilesightMdpSource implements TelemetrySource<MdpEnvelope> {
     return {
       ok: true,
       parsed: {
-        sourceEventId: v.envelope.eventID,
+        sourceEventId: eventIdOf(v.envelope),
         eventType: v.envelope.eventType,
         eventCreatedTime: v.eventCreatedTimeIso,
         envelope: v.envelope,

@@ -125,8 +125,14 @@ function normalizeDeviceData(envelope: MdpEnvelope, eventCreatedTime: number): N
  * already persisted the raw event and dead-letters it.
  */
 export function normalizeEnvelope(envelope: MdpEnvelope): NormalizeResult {
-  if (typeof envelope.eventID !== 'string' || envelope.eventID === '') {
-    throw new NormalizeError('envelope.eventID missing');
+  // OBSERVED 2026-08-03 on live callbacks: MDP sends `eventId` (lowercase d),
+  // not the documented `eventID`. Accept either — requiring the documented
+  // spelling dead-letters every real delivery.
+  const eventId =
+    (envelope as { eventId?: unknown }).eventId ??
+    (envelope as { eventID?: unknown }).eventID;
+  if (typeof eventId !== 'string' || eventId === '') {
+    throw new NormalizeError('envelope eventId/eventID missing');
   }
   const eventCreatedTime = parseEventCreatedTime(envelope.eventCreatedTime);
 
