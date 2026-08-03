@@ -10,6 +10,7 @@ const TABS = [
   { slug: 'feed', label: 'Feed' },
   { slug: 'water', label: 'Water' },
   { slug: 'movement', label: 'Movement' },
+  { slug: 'forecast', label: 'Forecast' },
 ] as const;
 
 export type OpsTab = (typeof TABS)[number]['slug'];
