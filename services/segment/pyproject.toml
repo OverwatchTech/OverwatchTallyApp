@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "overwatch-segment"
+version = "0.1.0"
+description = "Overwatch Tally segmentation service: FastAPI wrapping SAM 2 (NAIP-only imagery), polygonization + orthogonal regularization"
+requires-python = ">=3.11"
+# Heavy model deps (torch, sam2) are deliberately NOT here — they are the
+# `model` extra and are imported lazily inside model-touching code paths only.
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pillow>=10.0",
+    "numpy>=1.26",
+    "shapely>=2.0",
+    "modal>=0.64",
+]
+
+[project.optional-dependencies]
+raster = [
+    "rasterio>=1.3",
+]
+model = [
+    "torch>=2.3.1",
+    "torchvision>=0.18.1",
+    # sam2 is not on PyPI under Meta's name; install from source:
+    "sam2 @ git+https://github.com/facebookresearch/sam2.git",
+]
+onnx = [
+    "onnx>=1.16",
+    "onnxruntime>=1.18",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "network: hits the public NAIP endpoint (set SEGMENT_NETWORK_TESTS=1 to run)",
+    "model: requires SAM 2 weights (set SAM2_CHECKPOINT to run)",
+]
