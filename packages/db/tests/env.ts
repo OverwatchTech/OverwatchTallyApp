@@ -24,8 +24,12 @@ declare const process: {
 };
 
 // Node 21.7+ built-in dotenv: pick up packages/db/.env.local when present.
+// decodeURIComponent: URL.pathname percent-encodes spaces, and Windows user
+// directories have them; the drive-letter strip handles the leading slash.
 try {
-  process.loadEnvFile(new URL('../.env.local', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+  const p = decodeURIComponent(new URL('../.env.local', import.meta.url).pathname)
+    .replace(/^\/([A-Za-z]:)/, '$1');
+  process.loadEnvFile(p);
 } catch {
   // no file — env comes from the shell or CI, or the suite skips
 }
