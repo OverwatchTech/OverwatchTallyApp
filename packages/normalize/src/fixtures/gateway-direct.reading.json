@@ -1,0 +1,13 @@
+{
+  "source": "gateway-direct",
+  "envelope": {
+    "eventId": "gd-000000000001",
+    "eventCreatedTime": 1742872448,
+    "model": "EM300-MCS",
+    "kind": "reading",
+    "payload": {
+      "battery": 66,
+      "magnet_status": "close"
+    }
+  }
+}

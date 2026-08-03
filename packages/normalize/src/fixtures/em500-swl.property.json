@@ -1,0 +1,22 @@
+{
+  "eventID": "11111111-0000-4000-8000-000000000007",
+  "eventCreatedTime": "1742872448",
+  "eventVersion": "1.0",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": {
+      "deviceId": "1904371063669395006",
+      "sn": "6707E0461016A006",
+      "devEUI": "24D124707E040006",
+      "name": "Stock tank well",
+      "model": "EM500-SWL"
+    },
+    "type": "PROPERTY",
+    "tslID": "",
+    "payload": {
+      "battery": 85,
+      "depth": 123.5,
+      "measuring_equipment": { "rate": 1, "range_max": 500, "range_min": 0 }
+    }
+  }
+}

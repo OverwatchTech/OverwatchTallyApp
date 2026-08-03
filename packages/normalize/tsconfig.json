@@ -1,7 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "noEmit": true
+    "noEmit": true,
+    // Relative imports carry explicit .ts extensions so the package is
+    // directly consumable by the Deno edge function (no build step).
+    "allowImportingTsExtensions": true
   },
   "include": ["src"]
 }

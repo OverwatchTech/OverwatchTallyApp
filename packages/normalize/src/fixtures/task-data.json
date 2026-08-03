@@ -1,0 +1,10 @@
+{
+  "eventID": "22222222-0000-4000-8000-000000000005",
+  "eventCreatedTime": "1742872820",
+  "eventVersion": "1.0",
+  "eventType": "TASK_DATA",
+  "data": {
+    "taskID": "task-0001",
+    "status": "SUCCESS"
+  }
+}
