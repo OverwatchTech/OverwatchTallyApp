@@ -60,6 +60,14 @@ export default async function AppLayout({
               Settings
             </Link>
           )}
+          {claims.platformRole && (
+            <Link
+              href="/admin"
+              className="block rounded px-2 py-1.5 text-accent hover:bg-card"
+            >
+              Operations
+            </Link>
+          )}
         </nav>
 
         <div className="space-y-2 border-t border-hairline px-4 py-3">

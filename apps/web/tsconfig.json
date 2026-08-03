@@ -9,6 +9,7 @@
     "moduleResolution": "bundler",
     "jsx": "preserve",
     "incremental": true,
+    "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": false,
     "plugins": [
       {
