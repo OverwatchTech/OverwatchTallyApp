@@ -112,10 +112,28 @@ create policy alerts_member_ack on alerts for update to authenticated
 -- any alert". Acknowledging is the only edit a member makes. The guard
 -- applies only to requests arriving through PostgREST as `authenticated`;
 -- the engine below runs as the cron owner and is unaffected.
+--
+-- The staff test is INLINED rather than calling app.is_staff(), and that is
+-- load-bearing. RLS policy expressions are evaluated with the table owner's
+-- privileges, so every `*_member_read` policy calls app.is_staff() happily
+-- even though schema `app` has a NULL ACL and `authenticated` holds no USAGE
+-- on it. A trigger body is different: it executes as the INVOKER. Calling
+-- app.is_staff() here raised 42501 "permission denied for schema app" and no
+-- crew member could acknowledge an alert at all.
+--
+-- The two obvious repairs are both wrong. Granting `authenticated` USAGE on
+-- `app` hands every caller the whole rules engine. Marking this SECURITY
+-- DEFINER flips `current_user` to the owner, which silently satisfies the
+-- guard on the first line and turns the entire trigger into a no-op.
+--
+-- schema `auth` does grant USAGE to authenticated, so auth.jwt() is reachable.
+-- The predicate below is copied verbatim from app.is_staff(); if that ever
+-- changes, change this with it.
 create or replace function app.alerts_member_ack_only() returns trigger
 language plpgsql as $$
 begin
-  if current_user <> 'authenticated' or app.is_staff() then
+  if current_user <> 'authenticated'
+     or coalesce(auth.jwt() ->> 'platform_role', '') in ('installer','support','admin') then
     return new;
   end if;
   if new.org_id is distinct from old.org_id
