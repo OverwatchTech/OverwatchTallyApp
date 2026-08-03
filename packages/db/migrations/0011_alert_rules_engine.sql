@@ -753,8 +753,17 @@ revoke execute on function app.evaluate_alert_rules() from public;
 
 -- Offset from ot_rollups (*/5) so the engine reads settled rollups rather
 -- than racing the refresh for the same five-minute slot.
-select cron.schedule('ot_alert_rules', '2-59/5 * * * *',
-  $job$select app.evaluate_alert_rules()$job$);
+-- Guarded rather than bare: cron.schedule opens its own connection, so
+-- calling it inside a transaction terminates the backend and rolls the
+-- whole migration chunk back. The exists() check also makes a replay a
+-- no-op instead of a second job on the same schedule.
+do $$
+begin
+  if not exists (select 1 from cron.job where jobname = 'ot_alert_rules') then
+    perform cron.schedule('ot_alert_rules', '2-59/5 * * * *',
+      $job$select app.evaluate_alert_rules()$job$);
+  end if;
+end $$;
 
 -- ── Bootstrap helper ────────────────────────────────────────────
 
@@ -897,5 +906,23 @@ grant usage on schema public to alert_dispatcher;
 
 revoke all on function public.alert_dispatch_queue(int) from public;
 revoke all on function public.alert_dispatch_record(uuid, jsonb) from public;
+
+-- `revoke ... from public` is NOT sufficient on Supabase, and assuming it was
+-- left both of these RPCs callable by unauthenticated `anon` on the live
+-- database. Supabase ships a pg_default_acl that grants EXECUTE on every new
+-- function in `public` EXPLICITLY to anon, authenticated and service_role;
+-- an explicit grant is a separate ACL entry and survives a revoke from the
+-- PUBLIC pseudo-role. Verified before the fix: as `anon`,
+-- alert_dispatch_queue(200) returned every unresolved alert on every farm —
+-- including staff-only rows and the recipients block, which carries contact
+-- names, E.164 phone numbers and email addresses. SECURITY DEFINER means RLS
+-- never entered into it, and the function takes no org or farm argument to
+-- scope by. Both roles now get 42501.
+revoke execute on function public.alert_dispatch_queue(int) from anon, authenticated;
+revoke execute on function public.alert_dispatch_record(uuid, jsonb) from anon, authenticated;
+revoke execute on function public.seed_default_alert_rules(uuid) from anon;
+
+-- service_role keeps EXECUTE deliberately: it bypasses RLS on `alerts`
+-- directly, so revoking here would move no data out of its reach.
 grant execute on function public.alert_dispatch_queue(int) to alert_dispatcher;
 grant execute on function public.alert_dispatch_record(uuid, jsonb) to alert_dispatcher;
