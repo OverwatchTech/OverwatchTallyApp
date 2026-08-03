@@ -143,17 +143,30 @@ export function paramsOf(raw: unknown): Record<string, unknown> {
 /**
  * The thresholds a rule is actually set to, converted for reading
  * (CLAUDE.md #6 — `max_distance_mm` is stored in millimetres and read in
- * inches). Defaults mirror `seed_default_alert_rules` in migration 0011, so
- * a rule with empty params shows the number the engine will really use
+ * inches). Defaults mirror `seed_default_alert_rules` as of migration 0016,
+ * so a rule with empty params shows the number the engine will really use
  * rather than a blank.
+ *
+ * A DEFAULT HERE IS A CLAIM ABOUT WHAT THE ENGINE WILL DO. When it drifts
+ * from the condition function's own default it stops being a convenience and
+ * becomes a lie on a screen — see the days_on_hand_low case below, which is
+ * exactly that failure. If a value is not the rule's to know, say so; do not
+ * fill it in.
  */
 export function ruleSettings(kind: string, rawParams: unknown): RuleSetting[] {
   const p = paramsOf(rawParams);
 
   switch (kind) {
+    // Three thresholds because there are three kinds of sensor reading, and
+    // one number cannot mean the same thing to all of them (migration 0016).
+    // A sensor with a calibration curve is judged on percent full; without
+    // one, a distance sensor is judged on how far down to the water and a
+    // submersible on how much water is over it.
     case 'trough_low':
       return [
-        { label: 'Alerts below', value: formatMeasure(num(p, 'max_distance_mm', 700), 'mm') },
+        { label: 'Alerts below', value: `${num(p, 'min_percent_full', 25)}% full` },
+        { label: 'Or further down than', value: formatMeasure(num(p, 'max_distance_mm', 700), 'mm') },
+        { label: 'Or shallower than', value: formatMeasure(num(p, 'min_level_mm', 150), 'mm') },
         { label: 'Reading no older than', value: minutes(num(p, 'stale_minutes', 180)) },
       ];
     case 'refill_rate_change':
@@ -179,12 +192,34 @@ export function ruleSettings(kind: string, rawParams: unknown): RuleSetting[] {
       ];
     case 'gate_open_duration':
       return [{ label: 'Open longer than', value: minutes(num(p, 'max_open_minutes', 30)) }];
-    case 'days_on_hand_low':
+    // THE CARD THAT CONTRADICTED ITSELF. This line read "waste allowed for
+    // 15%" while the evidence block on the same card read 30%, and the
+    // evidence block was right: 94,086 kg × (1 − 0.30) ÷ 5,089.1 kg/day =
+    // 12.9 days on hand, which is the number that opened the alert. At 0.15
+    // it comes to 15.7 days and the alert would not have fired at all.
+    //
+    // The 15% came from a stale default here. Migration 0013d moved the waste
+    // factor out of this rule's params: it is resolved as a `waste_factor`
+    // override on the rule, then the farm's `feed_waste_factors` row, then
+    // 0.30 assumed — and this rule carries no override, so the number is not
+    // the rule's to state. Inventing one is what produced the contradiction,
+    // and hardcoding 0.30 instead would just re-create it for the first farm
+    // that sets its own. The rule line now says where the number lives; the
+    // evidence block says what it was and where it came from.
+    //
+    // `rate_days` was stale in the same way — 0013d moved it to 21.
+    case 'days_on_hand_low': {
+      const waste = p['waste_factor'];
+      const stated =
+        typeof waste === 'number' && Number.isFinite(waste)
+          ? `${Math.round(waste * 100)}%`
+          : 'the farm’s setting';
       return [
         { label: 'Alerts below', value: `${num(p, 'min_days', 14)} days` },
-        { label: 'Rate measured over', value: `${num(p, 'rate_days', 14)} days` },
-        { label: 'Waste allowed for', value: `${Math.round(num(p, 'waste_factor', 0.15) * 100)}%` },
+        { label: 'Rate measured over', value: `${num(p, 'rate_days', 21)} days` },
+        { label: 'Waste allowed for', value: stated },
       ];
+    }
     case 'sensor_offline':
       return [{ label: 'Quiet for', value: minutes(num(p, 'after_minutes', 30)) }];
     case 'battery_low':

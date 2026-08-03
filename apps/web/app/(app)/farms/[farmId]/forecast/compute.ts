@@ -1,70 +1,14 @@
-// Rolling the farm's separate stacks into the single set of inputs
-// `daysOfFeedOnHand` takes.
+// Price and date shaping for the forecast screen.
 //
-// The aggregation is EXACT, not an approximation. Averaging bale weight by
-// count and dry matter by as-fed mass reproduces the per-lot totals term for
-// term: baleCount × averageBaleWeight is Σ(count × weight), and
-// that × massWeightedDryMatter is Σ(count × weight × dm). Nothing is lost
-// and nothing is invented, which is the only reason it is safe to hand the
-// forecast package one stack where the farm has six.
-//
-// What IS lost is the shape of the mix, so the per-lot lines stay on screen
-// beside the total: one stack of weighed 5×6 rounds and one of assumed small
-// squares average to a number that describes neither.
+// `aggregateStack` used to live here. It moved to lib/ops/days-of-feed.ts and
+// sits beside `computeDaysOfFeed`, because the farm overview and the feed
+// screen have to roll the stack up exactly the way this screen does or they
+// answer "how much hay is left" differently. Re-exported from its old name so
+// this screen's imports still read the way they did.
 
 import { SHORT_TON_KG, type InventoryLine } from '@/lib/ops/feed';
-import type { BaleWeightSource } from '@overwatch/forecast';
 
-export interface AggregatedStack {
-  baleCount: number;
-  /** Count-weighted average bale weight, kg. */
-  baleWeightKg: number;
-  /**
-   * `calibrated` only when EVERY contributing stack was weighed here. One
-   * book figure in the mix makes the whole total a book figure — the
-   * pessimistic read is the honest one.
-   */
-  baleWeightSource: BaleWeightSource;
-  /** As-fed-mass-weighted dry matter, percent. */
-  dryMatterPct: number;
-  asFedKg: number;
-  /** Stacks with no bale type, and therefore no weight. Excluded, and said. */
-  lotsWithoutWeight: number;
-  lotsIncluded: number;
-}
-
-export function aggregateStack(lines: readonly InventoryLine[]): AggregatedStack | null {
-  const usable = lines.filter(
-    (l) => l.baleWeight !== null && l.onHandKg !== null && l.baleCount > 0,
-  );
-  const lotsWithoutWeight = lines.length - usable.length;
-  if (usable.length === 0) return null;
-
-  let baleCount = 0;
-  let asFedKg = 0;
-  let dmWeighted = 0;
-  let anyNominal = false;
-
-  for (const line of usable) {
-    const onHand = line.onHandKg ?? 0;
-    baleCount += line.baleCount;
-    asFedKg += onHand;
-    dmWeighted += onHand * line.dryMatterPct;
-    if (line.baleWeight?.provenance === 'nominal') anyNominal = true;
-  }
-
-  if (baleCount === 0 || asFedKg <= 0) return null;
-
-  return {
-    baleCount,
-    baleWeightKg: asFedKg / baleCount,
-    baleWeightSource: anyNominal ? 'nominal' : 'calibrated',
-    dryMatterPct: dmWeighted / asFedKg,
-    asFedKg,
-    lotsWithoutWeight,
-    lotsIncluded: usable.length,
-  };
-}
+export { aggregateStack, type AggregatedStack } from '@/lib/ops/days-of-feed';
 
 export interface BlendedPrice {
   /** Dollars per US short ton, ready for `costPerHeadDay`. */

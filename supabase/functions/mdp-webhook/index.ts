@@ -419,6 +419,14 @@ async function normalizeDeviceData(ctx: ProcessCtx): Promise<void> {
     return;
   }
 
+  // Ingest ends here, on purpose. Anything derived from a SERIES of readings
+  // — water volume from pulse_count, gate transitions from gate_state,
+  // battery_pct onto devices/device_health — is done set-based by
+  // app.derive_events_incremental() on the ot_derive_events pg_cron job
+  // (migration 0017). Do not add those writes to this path: the measured
+  // ingest ceiling is ~4,000–5,000 events/min and is bottlenecked on the two
+  // PostgREST round-trips already made per envelope (RUNBOOK-INGEST §7.5).
+  // Rationale in full: README "What this function deliberately does NOT do".
   if (result.kind === 'readings') {
     await pg().insert(
       'readings',

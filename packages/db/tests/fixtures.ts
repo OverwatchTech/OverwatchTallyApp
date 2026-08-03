@@ -34,12 +34,31 @@ export interface TestActor {
   readonly client: Client;
 }
 
+export type PlatformRole = 'installer' | 'support' | 'admin';
+
+/**
+ * A Mac's Tech staff account — the sixth actor, and the one whose absence let
+ * a total cross-tenant read leak sit under 207 green cases. It deliberately has
+ * NO org_members row: staff are not customers, so every row it can reach
+ * arrives through a staff policy and nothing else. If it were a member of org
+ * A, org A's rows would come back through the member policies and the staff
+ * probes below would prove nothing.
+ */
+export interface StaffTestActor {
+  readonly email: string;
+  readonly userId: string;
+  readonly platformRole: PlatformRole;
+  readonly accessToken: string;
+  readonly client: Client;
+}
+
 export interface World {
   readonly runId: string;
   readonly service: Client;
   readonly orgA: FixtureIds;
   readonly orgB: FixtureIds;
   readonly actors: Readonly<Record<ActorKey, TestActor>>;
+  readonly staff: StaffTestActor;
 }
 
 const POINT = 'SRID=4326;POINT(-104.912 40.501)';
@@ -479,6 +498,108 @@ async function createActor(
   };
 }
 
+/**
+ * The staff actor. `platform_role` goes in app_metadata, which is writable only
+ * through the admin API — a user cannot set it on themselves — and 0005's
+ * access-token hook copies it into the JWT, where app.is_staff() reads it.
+ */
+async function createStaffActor(
+  service: Client,
+  runId: string,
+  platformRole: PlatformRole,
+): Promise<StaffTestActor> {
+  const email = `${runId}-staff@test.local`;
+  const password = `Rls-${runId}-Aa1!`;
+
+  const created = await service.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { rls_suite_run: runId },
+    app_metadata: { platform_role: platformRole },
+  });
+  if (created.error || !created.data.user) {
+    throw new Error(
+      `could not create staff ${email}: ${created.error?.message ?? 'no user returned'}`,
+    );
+  }
+
+  // No org_members insert. That omission is the point — see StaffTestActor.
+
+  const anon = createClient(RLS_ENV.url, RLS_ENV.anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const signIn = await anon.auth.signInWithPassword({ email, password });
+  if (signIn.error || !signIn.data.session) {
+    throw new Error(`staff sign-in failed for ${email}: ${signIn.error?.message ?? 'no session'}`);
+  }
+  const accessToken = signIn.data.session.access_token;
+
+  return {
+    email,
+    userId: created.data.user.id,
+    platformRole,
+    accessToken,
+    client: createClient(RLS_ENV.url, RLS_ENV.anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { headers: { Authorization: `Bearer ${accessToken}` } },
+    }),
+  };
+}
+
+export interface Grant {
+  readonly auditId: number;
+  readonly orgId: string;
+}
+
+/**
+ * Open a support session on one org, the way lib/admin/impersonation.ts does:
+ * an `impersonation.start` row in audit_log carrying org, reason and an expiry
+ * inside 60 minutes. Written with the SERVICE role so the fixture does not
+ * depend on the console's own code path being correct.
+ *
+ * The staff client's existing access token is NOT reissued and does not need to
+ * be — app.staff_scope_org() reads the grant out of audit_log on every query,
+ * so the scope is server-side state, never a claim the client could forge.
+ */
+export async function startGrant(
+  world: World,
+  orgId: string,
+  reason = 'rls suite staff scope probe',
+  minutes = 30,
+): Promise<Grant> {
+  const { data, error } = await world.service
+    .from('audit_log')
+    .insert({
+      actor_user_id: world.staff.userId,
+      actor_platform_role: world.staff.platformRole,
+      org_id: orgId,
+      table_name: 'orgs',
+      record_id: orgId,
+      action: 'impersonation.start',
+      reason,
+      impersonation_expires_at: new Date(Date.now() + minutes * 60_000).toISOString(),
+    })
+    .select('id')
+    .single();
+  if (error || !data) throw new Error(`could not open grant: ${error?.message ?? 'no row'}`);
+  return { auditId: (data as { id: number }).id, orgId };
+}
+
+/** Close it. audit_log is append-only, so ending is a second row, never a delete. */
+export async function endGrant(world: World, grant: Grant): Promise<void> {
+  const { error } = await world.service.from('audit_log').insert({
+    actor_user_id: world.staff.userId,
+    actor_platform_role: world.staff.platformRole,
+    org_id: grant.orgId,
+    table_name: 'orgs',
+    record_id: String(grant.auditId),
+    action: 'impersonation.end',
+    reason: 'rls suite staff scope probe',
+  });
+  if (error) throw new Error(`could not close grant: ${error.message}`);
+}
+
 export async function setupWorld(): Promise<World> {
   const runId = newRunId();
   const service = serviceClient();
@@ -496,7 +617,12 @@ export async function setupWorld(): Promise<World> {
     );
   }
 
-  return { runId, service, orgA, orgB, actors: actors as Record<ActorKey, TestActor> };
+  // `support` is the lowest rank that may hold a grant at all (0014), so it is
+  // the rank that exercises both halves of the design: locked out without one,
+  // scoped to exactly one org with one.
+  const staff = await createStaffActor(service, runId, 'support');
+
+  return { runId, service, orgA, orgB, actors: actors as Record<ActorKey, TestActor>, staff };
 }
 
 /**
@@ -579,6 +705,15 @@ export async function teardownWorld(world: World): Promise<TeardownReport> {
     service.from('org_members').delete().in('org_id', orgIds).eq('role', 'owner'),
   );
   await swallow('delete orgs', () => service.from('orgs').delete().in('id', orgIds));
+
+  // The staff actor's impersonation grants are keyed on org, so the audit_log
+  // sweep above already took them; this only removes the account itself. It is
+  // not in `world.actors` (it has no org and no member role) so it needs its
+  // own line — a staff account left behind would be a real staff account.
+  const staffDelete = await service.auth.admin.deleteUser(world.staff.userId);
+  if (staffDelete.error) {
+    failures.push(`delete staff user ${world.staff.email}: ${staffDelete.error.message}`);
+  }
 
   for (const actor of Object.values(world.actors)) {
     const { error } = await service.auth.admin.deleteUser(actor.userId);

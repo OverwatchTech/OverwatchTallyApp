@@ -138,16 +138,56 @@ export function describeAlert(
   const tz = timezone;
 
   switch (kind) {
+    // THE READING IS NOT ALWAYS THE SAME QUANTITY, so the label cannot be.
+    // Migration 0016 puts two keys in `details` and they answer two
+    // different questions:
+    //   `metric`  what the number physically IS —
+    //             `distance_mm` measures DOWN to the water (bigger = lower)
+    //             `level_mm` measures the water standing over the sensor
+    //             (bigger = fuller). The reading's label comes from this.
+    //   `basis`   which test fired, so the threshold shown is the one that
+    //             was actually crossed: `percent_full` when a calibration
+    //             curve was on file, otherwise the raw metric.
+    // The old copy hardcoded "Down to water" for a value the rule read out
+    // of `level_mm` — a depth printed as a distance, in inches, at somebody
+    // standing in a feed alley. That is the mistake this rule was built on.
     case 'trough_low': {
       const where = place(d, 'a trough');
-      const level = number(d, 'level_mm');
-      const threshold = number(d, 'threshold_mm');
+      const basis = text(d, 'basis');
+      const reading = number(d, 'reading_mm');
+      const percent = number(d, 'percent_full');
+      const thresholdMm = number(d, 'threshold_mm');
+      const thresholdPct = number(d, 'threshold_pct');
+
+      // The raw reading is shown whichever test fired — a percentage nobody
+      // can check against the tape in their pocket is not evidence. It is
+      // labelled off `metric`, never off `basis`, because the metric is what
+      // the number physically is.
+      const metric = text(d, 'metric');
+      const readingLabel =
+        metric === 'level_mm' ? 'Water depth' : metric === 'distance_mm' ? 'Down to water' : null;
+
+      // Exactly one threshold, matching the test that fired. `label` is the
+      // React key in evidence.tsx, so two facts must never share one.
+      const threshold =
+        basis === 'percent_full'
+          ? thresholdPct === null
+            ? null
+            : `${thresholdPct.toFixed(0)}% full`
+          : thresholdMm === null
+            ? null
+            : formatMeasure(thresholdMm, 'mm');
+
       return {
         title: `Water is low at ${where}`,
-        detail: 'The trough is reading below the level this operation set. Check the float and the line.',
+        detail:
+          'The trough is reading below the level this operation set. Check the float and the line.',
         facts: [
-          ...fact('Down to water', level === null ? null : formatMeasure(level, 'mm')),
-          ...fact('Alerts below', threshold === null ? null : formatMeasure(threshold, 'mm')),
+          ...fact('How full', percent === null ? null : `${percent.toFixed(0)}%`),
+          ...fact('Alerts below', threshold),
+          ...(readingLabel === null || reading === null
+            ? []
+            : [{ label: readingLabel, value: formatMeasure(reading, 'mm') }]),
           ...fact('Reading taken', when(d, 'reading_at', tz)),
         ],
       };
@@ -274,10 +314,28 @@ export function describeAlert(
             const kg = number(d, 'feed_rate_kg_per_day');
             return kg === null ? null : `${formatMeasure(kg, 'kg')}/day`;
           })()),
-          ...fact('Waste allowed for', pct((() => {
+          // The waste factor is not a constant and it is not this rule's.
+          // Migration 0013d resolves it in order: a `waste_factor` on the
+          // rule, then the farm's row in `feed_waste_factors`, then 0.30
+          // assumed. `waste_factor_source` says which one won, and saying it
+          // is the difference between a number and a guess (CLAUDE.md #8) —
+          // this farm has neither an override nor a farm row, so the 30% here
+          // is the assumption, and the rule line says the same.
+          ...fact('Waste allowed for', (() => {
             const w = number(d, 'waste_factor');
-            return w === null ? null : w * 100;
-          })())),
+            if (w === null) return null;
+            const shown = pct(w * 100);
+            switch (text(d, 'waste_factor_source')) {
+              case 'assumed':
+                return `${shown} assumed`;
+              case 'rule_override':
+                return `${shown} set on this rule`;
+              case null:
+                return shown;
+              default:
+                return `${shown} set for this farm`;
+            }
+          })()),
           ...(missing !== null && missing > 0
             ? [{ label: 'Stacks with no bale weight', value: String(missing) }]
             : []),

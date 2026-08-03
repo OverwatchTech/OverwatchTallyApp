@@ -3,6 +3,7 @@
 // client; RLS scopes everything.
 import type { Database } from '@overwatch/db';
 import { formatMeasure } from '@overwatch/ui';
+import { loadDaysOfFeed, type FarmDaysOfFeed } from '@/lib/ops/days-of-feed';
 import { fetchOpenAlertCount, fetchWaterTodayL, type DbClient } from './vitals';
 import { alertHeadline, feedSourceLabel } from './voice';
 
@@ -37,9 +38,12 @@ export interface OverviewData {
     timezone: string;
   };
   headOnFeed: number | null;
-  /** Projection: inventory ÷ trailing 7-day feed rate. Hay gold, labeled. */
-  daysOfFeedEstimate: number | null;
-  feedRateKgPerDay: number | null;
+  /**
+   * THE days-of-feed number, from `computeDaysOfFeed` — the same function, the
+   * same rate window, the same waste factor, and the same weather adjustment
+   * the forecast screen uses. Not a second opinion. Hay gold, labeled.
+   */
+  daysOfFeed: FarmDaysOfFeed;
   waterTodayL: number | null;
   openAlerts: number;
   events: ActivityItem[];
@@ -47,7 +51,6 @@ export interface OverviewData {
 }
 
 const EVENT_WINDOW_DAYS = 14;
-const RATE_WINDOW_DAYS = 7;
 
 export async function getFarmOverview(
   client: DbClient,
@@ -64,29 +67,16 @@ export async function getFarmOverview(
   const nowIso = now.toISOString();
   const windowStart = new Date(now.getTime() - EVENT_WINDOW_DAYS * 86_400_000).toISOString();
 
-  const [
-    placementsRes,
-    inventoryRes,
-    baleTypesRes,
-    baleCalsRes,
-    feedRes,
-    gateRes,
-    alertsRes,
-    waterTodayL,
-    openAlerts,
-  ] = await Promise.all([
+  const [placementsRes, daysOfFeed, feedRes, gateRes, alertsRes, waterTodayL, openAlerts] =
+    await Promise.all([
     client
       .from('group_placements')
       .select('group_id, pen_feature_id')
       .eq('farm_id', farmId)
       .filter('valid', 'cs', `[${nowIso},${nowIso}]`),
-    client.from('feed_inventory').select('id, bale_count, bale_type_id').eq('farm_id', farmId),
-    client.from('bale_types').select('id, nominal_weight_kg'),
-    client
-      .from('farm_bale_calibrations')
-      .select('bale_type_id, measured_weight_kg, measured_at')
-      .eq('farm_id', farmId)
-      .order('measured_at', { ascending: false }),
+    // The stack, the rate, the waste factor, the weather — one call, one
+    // number, shared verbatim with the feed and forecast screens.
+    loadDaysOfFeed(client, farmId, farm.timezone, now),
     client
       .from('feed_events')
       .select('id, occurred_at, amount_kg, source, pen_feature_id')
@@ -136,34 +126,12 @@ export async function getFarmOverview(
     ? groupIds.reduce((sum, id) => sum + (headByGroup.get(id) ?? 0), 0)
     : null;
 
-  // ── days of feed on hand — an estimate, and labeled as one ──
-  // Stack inventory (calibrated bale weight preferred over nominal,
-  // DATA-MODEL §5) divided by the trailing 7-day feeding rate.
-  const nominalWeight = new Map(
-    (baleTypesRes.data ?? []).map((b) => [b.id, b.nominal_weight_kg ?? 0]),
-  );
-  const calibratedWeight = new Map<string, number>();
-  for (const cal of baleCalsRes.data ?? []) {
-    // Rows arrive newest-first; keep the most recent per bale type.
-    if (cal.bale_type_id && !calibratedWeight.has(cal.bale_type_id)) {
-      calibratedWeight.set(cal.bale_type_id, cal.measured_weight_kg);
-    }
-  }
-  const inventoryKg = (inventoryRes.data ?? []).reduce((sum, row) => {
-    const weight = row.bale_type_id
-      ? (calibratedWeight.get(row.bale_type_id) ?? nominalWeight.get(row.bale_type_id) ?? 0)
-      : 0;
-    return sum + row.bale_count * weight;
-  }, 0);
-  const rateFloor = now.getTime() - RATE_WINDOW_DAYS * 86_400_000;
-  const fedKgLast7 = feedEvents
-    .filter((e) => new Date(e.occurred_at).getTime() >= rateFloor)
-    .reduce((sum, e) => sum + (e.amount_kg ?? 0), 0);
-  const feedRateKgPerDay = fedKgLast7 > 0 ? fedKgLast7 / RATE_WINDOW_DAYS : null;
-  const daysOfFeedEstimate =
-    inventoryKg > 0 && feedRateKgPerDay
-      ? Math.floor(inventoryKg / feedRateKgPerDay)
-      : null;
+  // ── days of feed on hand ──
+  // `daysOfFeedEstimate` used to be computed right here: as-fed inventory over a
+  // trailing 7-day rate, floored to a whole number. It had no dry-matter
+  // conversion, no waste factor, and its own window, so it disagreed with the
+  // feed screen, the forecast screen, and the alert that links to them. It is
+  // gone; `daysOfFeed` above is the shared answer.
 
   // ── feature names for phrasing ──
   const featureIds = [
@@ -249,8 +217,7 @@ export async function getFarmOverview(
       timezone: farm.timezone,
     },
     headOnFeed,
-    daysOfFeedEstimate,
-    feedRateKgPerDay,
+    daysOfFeed,
     waterTodayL,
     openAlerts,
     events,

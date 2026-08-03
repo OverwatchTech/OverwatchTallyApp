@@ -21,32 +21,29 @@ import Link from 'next/link';
 import { formatMeasure } from '@overwatch/ui';
 import {
   DEFAULT_WEATHER_CURVE,
+  RATE_WINDOW_DAYS,
   consumptionRate,
   costPerHeadDay,
-  daysOfFeedOnHand,
-  effectiveTemperatureC,
   intakeAnomaly,
   reorderDateFromDaysOfFeed,
   rollUpCostPerHeadDay,
-  weatherAdjustment,
   type Assumption,
   type CostUnit,
-  type DaysOfFeedResult,
   type IntakePoint,
 } from '@overwatch/forecast';
 
 import { createClient } from '@/lib/supabase/server';
 import { OpsHeader } from '@/lib/ops/ops-header';
-import { inventoryLines } from '@/lib/ops/feed';
+import { inventoryLines, measuredRate } from '@/lib/ops/feed';
+import { computeDaysOfFeed, daysOfFeedAssumptions } from '@/lib/ops/days-of-feed';
+import { fetchWeatherWindow } from '@/lib/ops/weather';
 
-import { fetchFarm, fetchForecastData, measuredRate } from './data';
-import { aggregateStack, blendedPrice, dateLabel } from './compute';
-import { fetchWeatherWindow } from './weather';
+import { fetchFarm, fetchForecastData } from './data';
+import { blendedPrice, dateLabel } from './compute';
 import {
   DEFAULT_ASSUMPTIONS,
   DEFAULT_LEAD_TIME_DAYS,
   DEFAULT_SAFETY_STOCK_DAYS,
-  DEFAULT_WASTE_FACTOR,
   REFILL_JUMP_MM,
   WINDOW_DAYS,
 } from './defaults';
@@ -82,22 +79,39 @@ export default async function ForecastPage({
   if (!farm) notFound();
 
   const data = await fetchForecastData(supabase, farm);
-  const { features, herd, feed, daily, days: dayKeys, levelsByPen, centroid } = data;
+  const { features, herd, feed, daily, days: dayKeys, levelsByPen, centroid, waste } = data;
   const featureName = (id: string) => features.get(id)?.name ?? 'Unnamed pen';
 
   // ── The stack ─────────────────────────────────────────────────
   const lines = inventoryLines(feed.inventory, feed.baleTypes, feed.calibrations);
-  const stack = aggregateStack(lines);
   const price = blendedPrice(lines);
 
-  // ── The measured feed rate, as fed ────────────────────────────
-  const rate = measuredRate(daily);
+  // ── Weather ───────────────────────────────────────────────────
+  const weather = centroid === null ? null : await fetchWeatherWindow(centroid.lat, centroid.lon);
 
-  // As-fed → dry matter, using the stack's own mass-weighted dry matter.
-  // Intake targets are stated in dry matter; as-fed kilograms overstate it.
-  const dmFactor = stack === null ? null : stack.dryMatterPct / 100;
+  // ── Days of feed on hand ──────────────────────────────────────
+  // Not computed here. `computeDaysOfFeed` is the one implementation, and the
+  // farm overview and the feed screen call it with the same stack, the same
+  // rate window, the same resolved waste factor, and the same weather. This
+  // screen shows more of what it returns; it does not show a different number.
+  const daysOfFeed = computeDaysOfFeed({ lines, daily, waste, weather });
+  const {
+    stack,
+    rate,
+    dmFactor,
+    effectiveTempC,
+    adjustment,
+    raw: daysRaw,
+    adjusted: daysAdjusted,
+    // The weather-adjusted number leads when there is one — cold is the thing
+    // that empties a stack early — but the raw number stays on screen beside
+    // it, never replaced (weatherAdjustment's own contract).
+    leading,
+  } = daysOfFeed;
+
   const toDm = (kg: number | null): number =>
     kg === null || dmFactor === null ? Number.NaN : kg * dmFactor;
+  const adjustedDemand = adjustment?.adjustedDmDemandKgPerDay ?? null;
 
   const demandAssumptions: Assumption[] = [
     {
@@ -107,10 +121,19 @@ export default async function ForecastPage({
       source: 'derived',
       detail:
         `Averaged over the ${rate.daysCounted} logged ${rate.daysCounted === 1 ? 'day' : 'days'} ` +
-        `since the first feeding in the last ${WINDOW_DAYS}` +
+        `since the first feeding in the last ${RATE_WINDOW_DAYS}` +
         (rate.daysWithoutFeeding > 0
           ? `, including ${rate.daysWithoutFeeding} with nothing logged.`
           : '.'),
+    },
+    {
+      key: 'rate_window',
+      label: 'Every screen in this product averages the feeding rate over the same window',
+      value: RATE_WINDOW_DAYS,
+      source: 'default',
+      detail:
+        'Two whole weeks, so the answer does not swing with which day of the week you open it. ' +
+        'The overview card, this page, and the feed-is-short alert all divide by this same window.',
     },
     {
       key: 'demand_band_source',
@@ -118,64 +141,7 @@ export default async function ForecastPage({
       source: 'derived',
       detail: 'Not a confidence interval — the actual spread of how much went out each day.',
     },
-    DEFAULT_ASSUMPTIONS['waste'] as Assumption,
   ];
-
-  // ── Days of feed on hand, raw ─────────────────────────────────
-  const daysRaw: DaysOfFeedResult = daysOfFeedOnHand({
-    baleCount: stack?.baleCount ?? Number.NaN,
-    baleWeightKg: stack?.baleWeightKg ?? Number.NaN,
-    baleWeightSource: stack?.baleWeightSource ?? 'nominal',
-    dryMatterPct: stack?.dryMatterPct ?? Number.NaN,
-    wasteFactor: DEFAULT_WASTE_FACTOR,
-    dmDemandKgPerDay: toDm(rate.kgPerDay),
-    ...(rate.lowKgPerDay !== null ? { dmDemandLowKgPerDay: toDm(rate.lowKgPerDay) } : {}),
-    ...(rate.highKgPerDay !== null ? { dmDemandHighKgPerDay: toDm(rate.highKgPerDay) } : {}),
-  });
-
-  // ── Weather ───────────────────────────────────────────────────
-  const weather = centroid === null ? null : await fetchWeatherWindow(centroid.lat, centroid.lon);
-  const effectiveTempC =
-    weather === null
-      ? null
-      : effectiveTemperatureC({
-          airTempC: weather.airTempC,
-          ...(weather.windSpeedMps !== null ? { windSpeedMps: weather.windSpeedMps } : {}),
-        });
-
-  const adjustment =
-    effectiveTempC === null || !Number.isFinite(toDm(rate.kgPerDay))
-      ? null
-      : weatherAdjustment({
-          rawDmDemandKgPerDay: toDm(rate.kgPerDay),
-          effectiveTempC,
-        });
-
-  const adjustedDemand = adjustment?.adjustedDmDemandKgPerDay ?? null;
-  const multiplier = adjustment?.multiplier ?? null;
-
-  const daysAdjusted: DaysOfFeedResult | null =
-    adjustedDemand === null
-      ? null
-      : daysOfFeedOnHand({
-          baleCount: stack?.baleCount ?? Number.NaN,
-          baleWeightKg: stack?.baleWeightKg ?? Number.NaN,
-          baleWeightSource: stack?.baleWeightSource ?? 'nominal',
-          dryMatterPct: stack?.dryMatterPct ?? Number.NaN,
-          wasteFactor: DEFAULT_WASTE_FACTOR,
-          dmDemandKgPerDay: adjustedDemand,
-          ...(rate.lowKgPerDay !== null && multiplier !== null
-            ? { dmDemandLowKgPerDay: toDm(rate.lowKgPerDay) * multiplier }
-            : {}),
-          ...(rate.highKgPerDay !== null && multiplier !== null
-            ? { dmDemandHighKgPerDay: toDm(rate.highKgPerDay) * multiplier }
-            : {}),
-        });
-
-  // The weather-adjusted number leads when there is one — cold is the thing
-  // that empties a stack early — but the raw number stays on screen beside
-  // it, never replaced (weatherAdjustment's own contract).
-  const leading = daysAdjusted ?? daysRaw;
 
   // ── Reorder ───────────────────────────────────────────────────
   const reorder = reorderDateFromDaysOfFeed(leading, {
@@ -191,7 +157,7 @@ export default async function ForecastPage({
   ].filter((p) => p !== 'unassigned');
 
   const penRows = pensWithFeed.map((penId) => {
-    const penRate = measuredRate(daily, penId);
+    const penRate = measuredRate(daily, { penId });
     const groupId = herd.currentGroupByPen.get(penId);
     const head = groupId === undefined ? null : (herd.headCounts.get(groupId) ?? null);
     const series = levelsByPen.find((s) => s.penId === penId);
@@ -373,7 +339,11 @@ export default async function ForecastPage({
           confidence={leading.confidence}
           confidenceReasons={leading.confidenceReasons}
           assumptions={[
-            ...leading.assumptions,
+            // Not `leading.assumptions` verbatim: the package stamps the waste
+            // factor `source: 'caller'` because from inside the package a
+            // parameter WAS chosen by the caller. Only this layer knows whether
+            // the farm actually set it, so it supplies the honest line.
+            ...daysOfFeedAssumptions(leading, waste, farm.timezone),
             ...demandAssumptions,
             ...(adjustment?.assumptions ?? []),
           ]}
@@ -394,7 +364,17 @@ export default async function ForecastPage({
                 },
                 { label: 'Weight on hand, as fed', value: stack === null ? null : formatMeasure(stack.asFedKg, 'kg_ton') },
                 { label: 'Dry matter', value: stack === null ? null : `${stack.dryMatterPct.toFixed(1)}%` },
-                { label: 'Waste allowed for', value: `${(DEFAULT_WASTE_FACTOR * 100).toFixed(0)}%` },
+                {
+                  label: 'Waste allowed for',
+                  value:
+                    `${(waste.wasteFactor * 100).toFixed(0)}% · ` +
+                    (waste.scope === 'default'
+                      ? 'nobody here chose this'
+                      : waste.scope === 'pen'
+                        ? 'set for this pen'
+                        : 'set for this farm'),
+                },
+                { label: 'Feeding rate averaged over', value: `${RATE_WINDOW_DAYS} days` },
                 { label: 'Dry matter that reaches an animal', value: leading.feedableDryMatterKg === null ? null : formatMeasure(leading.feedableDryMatterKg, 'kg_ton') },
                 { label: 'Feeding rate, as fed', value: lbPerDay(rate.kgPerDay) },
                 { label: 'Feeding rate, dry matter', value: Number.isFinite(toDm(rate.kgPerDay)) ? lbPerDay(toDm(rate.kgPerDay)) : null },

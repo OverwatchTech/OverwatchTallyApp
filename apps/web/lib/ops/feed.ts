@@ -3,6 +3,7 @@
 // measured, estimates are flagged so the UI can render them in hay
 // (projections only, CLAUDE.md #4) and say "estimated" out loud.
 
+import { RATE_WINDOW_DAYS } from '@overwatch/forecast';
 import { dayKey, lastNDayKeys, minutesOfDay } from './tz';
 
 /** US short ton (2,000 lb) in kilograms — ranch "per ton" pricing basis. */
@@ -275,11 +276,16 @@ export interface CostRollup {
   usesNominalBaleWeight: boolean;
 }
 
+/**
+ * `recentDailyKg` is passed in rather than computed here, and it comes from
+ * `measuredRate` like every other rate in the product. This function used to
+ * average its own trailing 7 days, which made the ration cost disagree with the
+ * days-of-feed figure printed two cards away on the same screen.
+ */
 export function costRollup(
   lines: InventoryLine[],
-  daily: DailyPenFeed[],
+  recentDailyKg: number | null,
   headCount: number | null,
-  recentDays = 7,
 ): CostRollup {
   const priced = lines.filter((l) => l.costPerKg !== null && l.onHandKg !== null);
   const massTotal = priced.reduce((s, l) => s + (l.onHandKg ?? 0), 0);
@@ -287,10 +293,6 @@ export function costRollup(
     priced.length > 0 && massTotal > 0
       ? priced.reduce((s, l) => s + (l.onHandKg ?? 0) * (l.costPerKg ?? 0), 0) / massTotal
       : null;
-
-  const recent = daily.slice(-recentDays);
-  const recentDailyKg =
-    recent.length > 0 ? recent.reduce((s, d) => s + d.totalKg, 0) / recent.length : null;
 
   const estCostPerDay =
     blendedCostPerKg !== null && recentDailyKg !== null
@@ -311,14 +313,112 @@ export function costRollup(
   };
 }
 
+// `daysOnHand` used to live here: total as-fed kilograms ÷ the trailing feed
+// rate, with no dry-matter conversion and no waste factor. It was optimistic by
+// weeks and it disagreed with the forecast screen, the farm overview, and the
+// alert rule — four surfaces, four answers, one stack.
+//
+// It is gone. There is one days-of-feed number and it comes from
+// `computeDaysOfFeed` in ./days-of-feed.ts, which calls `daysOfFeedOnHand` in
+// packages/forecast with the dry-matter and waste multipliers applied before the
+// division, exactly as the forecast screen does.
+
+// ── The measured feeding rate ───────────────────────────────────────
+
+export interface MeasuredRate {
+  /** As-fed kilograms per day, measured — not a projection. */
+  kgPerDay: number | null;
+  /** 10th percentile of the daily totals actually observed. */
+  lowKgPerDay: number | null;
+  /** 90th percentile of the same. */
+  highKgPerDay: number | null;
+  /** Days counted — the divisor, said out loud. */
+  daysCounted: number;
+  /** Days inside the window with no feeding logged at all. */
+  daysWithoutFeeding: number;
+  /** Days of the window offered to it — RATE_WINDOW_DAYS unless overridden. */
+  windowDays: number;
+  totalKg: number;
+}
+
+function percentile(sorted: number[], p: number): number | null {
+  if (sorted.length === 0) return null;
+  if (sorted.length === 1) return sorted[0] ?? null;
+  const index = (sorted.length - 1) * p;
+  const low = Math.floor(index);
+  const high = Math.ceil(index);
+  const lowValue = sorted[low];
+  const highValue = sorted[high];
+  if (lowValue === undefined || highValue === undefined) return null;
+  return lowValue + (highValue - lowValue) * (index - low);
+}
+
 /**
- * Days on hand across all inventory at the recent feed rate. A projection —
- * rendered in hay, always. Null when either side is unknown.
+ * The daily feed rate, measured from `feed_events`, over the days that have
+ * actually been logged.
+ *
+ * ONE WINDOW, FOR EVERY SURFACE. `windowDays` defaults to
+ * `RATE_WINDOW_DAYS` from packages/forecast and callers should leave it alone;
+ * the parameter exists so a caller holding a longer series (the forecast
+ * screen keeps 21 days for its anomaly baseline) still divides by the same
+ * trailing window as everybody else.
+ *
+ * TODAY IS DROPPED, AND CALLERS MUST SUPPLY `windowDays + 1` BUCKETS.
+ * `daily` is oldest-first and ends on the current farm-local day, which is
+ * always partial — the evening feeding has not happened yet. A partial day
+ * reads as a light feeding day, which drags the average DOWN, which pushes
+ * days-on-hand UP. That is the optimistic direction and it is the wrong one to
+ * be wrong in when the question is whether the hay lasts. It also puts the
+ * central figure outside its own band whenever today is the lightest bucket in
+ * the window: the mean falls below the 10th percentile and a rancher reads
+ * "13.1 days (12.0–12.9)", which is the app visibly not believing itself.
+ * So the last bucket is discarded and the newest `windowDays` COMPLETE days
+ * are what count. Every surface hands over one more bucket than it needs and
+ * lands on exactly the same fourteen days.
+ *
+ * The divisor is days since the first logged feeding, not the whole window:
+ * an operation that started logging four days ago has a four-day average, not
+ * a fourteen-day one padded with zeros. Zero-days INSIDE that span do count —
+ * they are real days on which nothing was fed — and they are reported
+ * separately so a reader can see whether the average is diluted by a gap in
+ * the record rather than a gap in the feeding.
  */
-export function daysOnHand(lines: InventoryLine[], recentDailyKg: number | null): number | null {
-  const totalKg = lines.reduce((s, l) => s + (l.onHandKg ?? 0), 0);
-  if (totalKg <= 0 || recentDailyKg === null || recentDailyKg <= 0) return null;
-  return totalKg / recentDailyKg;
+export function measuredRate(
+  daily: readonly DailyPenFeed[],
+  options: { penId?: string; windowDays?: number } = {},
+): MeasuredRate {
+  const windowDays = options.windowDays ?? RATE_WINDOW_DAYS;
+  const penId = options.penId;
+  const window = daily.slice(0, -1).slice(-windowDays);
+  const totals = window.map((d) => (penId === undefined ? d.totalKg : (d.byPen[penId] ?? 0)));
+
+  const firstIndex = totals.findIndex((kg) => kg > 0);
+  if (firstIndex === -1) {
+    return {
+      kgPerDay: null,
+      lowKgPerDay: null,
+      highKgPerDay: null,
+      daysCounted: 0,
+      daysWithoutFeeding: 0,
+      windowDays,
+      totalKg: 0,
+    };
+  }
+
+  const counted = totals.slice(firstIndex);
+  const totalKg = counted.reduce((sum, kg) => sum + kg, 0);
+  const daysCounted = counted.length;
+  const sorted = [...counted].sort((a, b) => a - b);
+
+  return {
+    kgPerDay: daysCounted > 0 ? totalKg / daysCounted : null,
+    lowKgPerDay: percentile(sorted, 0.1),
+    highKgPerDay: percentile(sorted, 0.9),
+    daysCounted,
+    daysWithoutFeeding: counted.filter((kg) => kg === 0).length,
+    windowDays,
+    totalKg,
+  };
 }
 
 /** Scheduled total kg for one day across active schedules (null if no targets). */
@@ -335,6 +435,15 @@ export function scheduledKgPerDay(schedules: FeedScheduleRow[], day: string): nu
     }
   }
   return any ? total : null;
+}
+
+/**
+ * The day keys `measuredRate` needs: `RATE_WINDOW_DAYS` complete days plus
+ * today, which it discards. Every surface that divides a stack by a rate builds
+ * its buckets from this so they all land on the same fourteen days.
+ */
+export function rateDayKeys(timezone: string, now: Date = new Date()): string[] {
+  return lastNDayKeys(timezone, RATE_WINDOW_DAYS + 1, now);
 }
 
 export { lastNDayKeys };

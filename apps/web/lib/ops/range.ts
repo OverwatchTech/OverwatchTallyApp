@@ -10,8 +10,23 @@ export interface TstzRange {
 function parseBound(raw: string): Date | null {
   const s = raw.trim().replace(/^"|"$/g, '');
   if (!s || s === 'infinity' || s === '-infinity') return null;
-  // Postgres emits "YYYY-MM-DD HH:MM:SS.ssssss+TZ"; make it ISO 8601.
-  const iso = s.replace(' ', 'T');
+
+  // Postgres emits "YYYY-MM-DD HH:MM:SS.ssssss+00" — a SHORT two-digit UTC
+  // offset. Swapping the space for a T is not enough: ISO 8601 requires
+  // "+00:00" or "Z", and `new Date("...T02:43:39.825+00")` is Invalid Date in
+  // V8. This silently returned null for EVERY water_events row, so the water
+  // screen rendered "0 gal / no troughs reporting" while the farm overview,
+  // reading the same rows through a different path, showed 1,514 gal.
+  //
+  // Nothing failed loudly: the rows arrived, parsed to null, and were dropped.
+  // Postgres widens the offset to "+05:30" style only when it has minutes, so
+  // both forms have to be handled.
+  let iso = s.replace(' ', 'T');
+  iso = iso.replace(/([+-]\d{2})$/, '$1:00');
+  // A bound with no offset at all should not be read in the server's local
+  // zone — every timestamp in this system is stored UTC (CLAUDE.md #6).
+  if (!/(?:Z|[+-]\d{2}:\d{2})$/.test(iso)) iso += 'Z';
+
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d;
 }

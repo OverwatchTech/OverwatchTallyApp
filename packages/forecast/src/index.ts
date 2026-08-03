@@ -53,6 +53,11 @@
 
 export const PACKAGE = '@overwatch/forecast' as const;
 
+// --- the rate window --------------------------------------------------------
+// How far back "how much are we feeding a day" looks. ONE number, read by every
+// surface that divides a stack by a rate. See windows.ts for why 14.
+export { RATE_WINDOW_DAYS } from './windows';
+
 // --- shared vocabulary ------------------------------------------------------
 export {
   MS_PER_DAY,

@@ -1,5 +1,13 @@
 // NWS gridpoint forecast for the farm centroid.
 //
+// Lives in lib/ops, not under the forecast route, because the weather
+// adjustment is part of the ONE days-of-feed number (lib/ops/days-of-feed.ts),
+// and the farm overview and feed screen show that same number. A surface that
+// skipped the adjustment would render a different figure from the forecast
+// screen for the same stack at the same moment — the exact defect that module
+// exists to close. Responses are `revalidate`-cached per URL, so the three
+// screens share one call rather than making three.
+//
 // FAIL SOFT IS THE CONTRACT. api.weather.gov is a free public service with
 // no SLA. When it is slow, rate-limited, down, or the farm sits outside its
 // coverage, this module returns null and the screen shows the raw demand on

@@ -117,6 +117,35 @@ integration and replaces the passthrough body; the
 data types are kept raw (`status 'ignored'`) and reprocessable once real
 mappings exist.
 
+## What this function deliberately does NOT do
+
+**Ingest ends at `readings` and `device_health.online`.** Everything derived
+from a *series* of readings — water volume from `pulse_count`, gate
+transitions from `gate_state`, `battery_pct` propagation onto `devices` /
+`device_health` — happens in
+`packages/db/migrations/0017_event_derivation.sql`, on the `ot_derive_events`
+pg_cron job (`1-59/5`), not here.
+
+That is a deliberate trade, and the reason is measured, not assumed:
+
+- `docs/RUNBOOK-INGEST.md` §7.5 puts the ingest ceiling at ~4,000–5,000
+  events/min and names the bottleneck as **round-trips** — this function
+  already makes two PostgREST calls per envelope and walks a batch serially.
+  Batching does not raise the ceiling. Any extra per-envelope call lowers it.
+- Derivation is inherently set-based. A pulse delta needs the *previous*
+  reading; a gate event needs the *previous* state. Doing that one envelope at
+  a time is the most expensive possible shape for the cheapest possible work.
+- A scheduled pass is re-runnable and backfillable. Inline is neither — it
+  cannot repair the history already in `readings`, and a normalization that
+  died leaves nothing behind to re-derive from.
+- Cost of the trade: the water screen is up to ~5 minutes behind live. It
+  buckets by day. Five minutes is invisible there.
+
+So: do **not** add a `water_events` / `gate_events` / `battery_pct` write to
+`normalizeDeviceData`. If derivation ever has to be closer to real time,
+tighten the cron schedule — the derivation functions are idempotent and a
+re-run over an overlapping window is a no-op.
+
 ## Verify
 
 - Without Deno (Deno not installed on the build machine; installing was out

@@ -7,6 +7,30 @@
 //
 // Every mapping in src/models/ may only emit metrics from this list — the
 // `Metric` type enforces that at compile time.
+//
+// ── level_mm vs distance_mm. THE DEFINITION. ────────────────────────────
+//
+//   distance_mm  Sensor face → the surface of the material.
+//                BIGGER MEANS EMPTIER.
+//   level_mm     Depth of liquid standing above the sensor.
+//                BIGGER MEANS FULLER.
+//
+// They are opposites and they always were. Nothing may treat them as two
+// spellings of one quantity, compare them to a shared threshold, or plot
+// them on one series without converting first.
+//
+// This is written down because assuming otherwise had already shipped: the
+// `trough_low` alert rule (migration 0011, severity critical) filtered on
+// `level_mm` — which only the submersible EM500-SWL emits — and then applied
+// the distance test "bigger is emptier" to it. It matched none of the
+// EM400-UDL / EM500-UDL / EM410-RDL sensors actually mounted on the troughs,
+// and where it could have matched, the comparison ran backwards. It had
+// opened zero alerts in the life of the database. Migration 0016 fixes the
+// rule; this comment exists so the definition cannot drift again.
+//
+// Converting between them needs the install height and a versioned
+// calibration curve (DATA-MODEL §4, `device_calibrations`). Neither is known
+// in this package, which is why nothing here does the conversion.
 
 export const METRICS = [
   // Liquid / fill level, millimetres. Emitted by EM500-SWL (docs report

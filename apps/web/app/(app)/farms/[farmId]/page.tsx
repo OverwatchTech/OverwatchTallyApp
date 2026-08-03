@@ -4,10 +4,18 @@
 // through today, and whether anything is actually wrong.
 //
 // Semantics (CLAUDE.md #4): head and water-today are measured, so they render
-// foreground/water. Days of feed on hand is a PROJECTION — inventory divided
-// by the trailing feed rate — so it renders hay and says "estimate" out loud.
-// Alert orange appears only when an alert is actually open; a farm with
-// nothing wrong shows a muted zero, never a decorative orange one.
+// foreground/water. Days of feed on hand is a PROJECTION so it renders hay and
+// says "estimate" out loud. Alert orange appears only when an alert is actually
+// open; a farm with nothing wrong shows a muted zero, never a decorative orange
+// one.
+//
+// The days-of-feed figure is NOT computed here and is not this screen's own
+// opinion. It comes from `computeDaysOfFeed` (lib/ops/days-of-feed.ts) — the
+// same function, window, waste factor, and weather adjustment the feed screen
+// and the forecast screen use — because four surfaces answering "how much hay
+// is left" four different ways is the fastest way to lose a rancher's trust.
+// A small card shows the central figure with the band beneath it; the full
+// treatment, with every assumption, lives one click away on the forecast screen.
 
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -15,6 +23,7 @@ import { formatMeasure } from '@overwatch/ui';
 import { createClient } from '@/lib/supabase/server';
 import { claimsFromSession, isManagerOrOwner } from '@/lib/auth/claims';
 import { formatTier } from '@/lib/format';
+import { daysBandLabel } from '@/lib/ops/days-of-feed';
 import { getFarmOverview } from '@/lib/dashboard/overview';
 import { formatDayClock } from '@/lib/dashboard/timezone';
 import { FarmForm } from './farm-form';
@@ -31,8 +40,9 @@ export default async function FarmPage({ params }: { params: Promise<{ farmId: s
 
   const overview = await getFarmOverview(supabase, farmId);
   if (!overview) notFound();
-  const { farm, pens, events } = overview;
+  const { farm, pens, events, daysOfFeed } = overview;
   const tz = farm.timezone;
+  const band = daysBandLabel(daysOfFeed.leading);
 
   const {
     data: { session },
@@ -119,16 +129,29 @@ export default async function FarmPage({ params }: { params: Promise<{ farmId: s
           </p>
         </div>
 
-        {/* Projection — hay, and it says so. */}
+        {/* Projection — hay, and it says so. One figure, the band beneath it:
+            a small card has no room for the full treatment, and a truncated
+            range reads as a promise the band does not make. The forecast
+            screen carries the whole thing. */}
         <div className="rounded-lg border border-hairline bg-card p-4">
           <p className="text-xs text-muted">Days of feed on hand</p>
           <p className="machine mt-1 text-lg text-hay">
-            {overview.daysOfFeedEstimate !== null ? overview.daysOfFeedEstimate : '—'}
+            {daysOfFeed.leading.days !== null ? daysOfFeed.leading.days.toFixed(1) : '—'}
           </p>
           <p className="text-xs text-hay/70">
-            {overview.feedRateKgPerDay
-              ? `estimate · at ${formatMeasure(overview.feedRateKgPerDay, 'kg', { digits: 0 })}/day`
-              : 'estimate · needs a feeding rate'}
+            {band !== null
+              ? `estimate · ${band}`
+              : daysOfFeed.rate.kgPerDay !== null
+                ? `estimate · at ${formatMeasure(daysOfFeed.rate.kgPerDay, 'kg', { digits: 0 })}/day`
+                : 'estimate · needs a feeding rate'}
+          </p>
+          <p className="mt-1 text-xs text-faint">
+            <Link
+              href={`/farms/${farm.id}/forecast`}
+              className="underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              What went into this
+            </Link>
           </p>
         </div>
 
@@ -139,8 +162,18 @@ export default async function FarmPage({ params }: { params: Promise<{ farmId: s
               ? formatMeasure(overview.waterTodayL, 'l', { digits: 0 })
               : '—'}
           </p>
+          {/* NOT "metered". The volume is a pulse delta multiplied by a
+              litres-per-pulse factor, and there is not one row in
+              device_calibrations on any farm yet — so that multiplier is a
+              documented default nobody has checked against a real meter. It
+              currently implies ~27 gal/head/day against a sane 6-15, i.e.
+              wrong by roughly 2x. Calling it "metered" would assert the
+              measured semantic (CLAUDE.md #4) for a number nobody measured.
+              Say estimate until an installer records the meter's pulse rate. */}
           <p className="text-xs text-faint">
-            {overview.waterTodayL !== null ? 'metered since midnight' : 'no water metering yet'}
+            {overview.waterTodayL !== null
+              ? 'estimate · meter not calibrated'
+              : 'no water metering yet'}
           </p>
         </div>
 

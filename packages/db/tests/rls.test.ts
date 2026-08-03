@@ -39,12 +39,24 @@ import {
 } from './partitions';
 import {
   decodeJwtClaims,
+  endGrant,
   serviceClient,
   setupWorld,
+  startGrant,
   teardownWorld,
   type ActorKey,
+  type Grant,
   type World,
 } from './fixtures';
+import {
+  ROSTER_RELATIONS,
+  STAFF_SCOPED_RELATIONS,
+  SCOPE_MARKER,
+  isGrantExempt,
+  staffPolicyAudit,
+  type ScopedRelation,
+  type StaffPolicyRow,
+} from './staff';
 
 announceEnv();
 
@@ -60,11 +72,19 @@ const NET = 30_000;
 let discovered: PartitionAudit[] = [];
 let discoveryError: string | null = null;
 
+let staffPolicies: StaffPolicyRow[] = [];
+let staffPolicyError: string | null = null;
+
 if (RLS_ENV.ready) {
   try {
     discovered = await auditPartitions(serviceClient());
   } catch (err) {
     discoveryError = err instanceof Error ? err.message : String(err);
+  }
+  try {
+    staffPolicies = await staffPolicyAudit(serviceClient());
+  } catch (err) {
+    staffPolicyError = err instanceof Error ? err.message : String(err);
   }
 }
 
@@ -242,6 +262,92 @@ describe.skipIf(!RLS_ENV.ready)('partition row security (catalog invariant)', ()
           `lands in: ${absent.join(', ')}. Fix: select app.publish_readings_partition(...).`,
       ).toEqual([]);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Staff policy shape — the catalog invariant that makes 0015 permanent.
+//
+// The behavioural probes further down attack the tables somebody remembered to
+// list. This block attacks the SCHEMA, so a table nobody listed is covered too.
+//
+// It exists because the previous attempt at this fix removed `OR app.is_staff()`
+// from the `*_member_read` policies and shipped. That changed nothing: a policy
+// declared FOR ALL also grants SELECT, permissive policies are OR'd, and ~40
+// tables also carried a FOR ALL `*_staff_write` policy, so the rows kept coming
+// back through the write policy. A probe of two or three tables would have
+// looked clean.
+//
+// Like the partition block, this needs no fixture world — only the catalog — so
+// it runs even when the tenant fixtures fail to build.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(!RLS_ENV.ready)('staff policy shape (catalog invariant)', () => {
+  it('can read the policy catalog', () => {
+    expect(staffPolicyError, `staff policy audit failed:\n${staffPolicyError}`).toBeNull();
+    expect(
+      staffPolicies.length,
+      'the catalog reports zero is_staff policies. Either the audit function is ' +
+        'filtering everything out or staff have no access path at all — both are ' +
+        'failures, and the second would break /admin entirely.',
+    ).toBeGreaterThan(0);
+  });
+
+  it('no staff policy is FOR ALL', () => {
+    const forAll = staffPolicies.filter((p) => p.cmd === '*');
+    expect(
+      forAll.map((p) => `${p.relation}.${p.policy_name}`),
+      'A FOR ALL policy grants SELECT as well as INSERT/UPDATE/DELETE, and ' +
+        'permissive policies are OR\'d together — so one of these silently ' +
+        'restores cross-tenant READ on its table no matter what the *_member_read ' +
+        'policy says. Split it into explicit insert/update/delete policies ' +
+        '(app.apply_staff_policies in 0015 does exactly that).',
+    ).toEqual([]);
+  });
+
+  it('every staff policy is scoped to an impersonation grant', () => {
+    const unscoped = staffPolicies.filter(
+      (p) =>
+        !isGrantExempt(p) &&
+        !`${p.using_expr} ${p.check_expr}`.includes(SCOPE_MARKER),
+    );
+    expect(
+      unscoped.map((p) => `${p.relation}.${p.policy_name} [${p.cmd}]`),
+      'These reach customer rows on app.is_staff() alone — no support session, ' +
+        'no reason, no expiry, no audit row. Add `and org_id = app.staff_scope_org()`. ' +
+        'If a policy genuinely must be unscoped, it goes in GRANT_EXEMPT in ' +
+        'tests/staff.ts WITH its justification, not into this list.',
+    ).toEqual([]);
+  });
+
+  it('never lets a staff write predicate be broader than the staff read predicate', () => {
+    // If staff can UPDATE a row they cannot SELECT, withAudit()'s trailing
+    // .select() comes back empty after a successful write and audit.ts records
+    // `<action>:failed` — while the customer's data HAS changed. A false audit
+    // trail is worse than no audit trail, because it is believed.
+    const byRelation = new Map<string, StaffPolicyRow[]>();
+    for (const p of staffPolicies) {
+      byRelation.set(p.relation, [...(byRelation.get(p.relation) ?? []), p]);
+    }
+
+    const broken: string[] = [];
+    for (const [relation, policies] of byRelation) {
+      if (relation === 'audit_log') continue; // append-only by design: insert, no select of its own
+      const reads = policies.filter((p) => p.cmd === 'r').map((p) => p.using_expr);
+      const writes = policies.filter((p) => p.cmd === 'a' || p.cmd === 'w' || p.cmd === 'd');
+      if (writes.length === 0) continue;
+      if (reads.length === 0) {
+        broken.push(`${relation}: has staff writes but NO staff select policy`);
+        continue;
+      }
+      for (const w of writes) {
+        const pred = w.cmd === 'a' ? w.check_expr : w.using_expr;
+        if (!reads.some((r) => r === pred)) {
+          broken.push(`${relation}.${w.policy_name} [${w.cmd}] predicate is not one of the read predicates`);
+        }
+      }
+    }
+    expect(broken, 'staff can write rows they cannot read back').toEqual([]);
   });
 });
 
@@ -741,6 +847,261 @@ describe.skipIf(!RLS_ENV.ready)(
             source: 'crew_logged',
           });
           expect(error?.code, 'org B planted a feed event in org A').toBe(RLS_DENIED);
+        },
+        NET,
+      );
+    });
+
+    // ── the sixth actor: Mac's Tech staff ───────────────────────────────────
+    //
+    // The owner's rule: "Staff of Mac's Tech should have access to /admin for
+    // all the account management. But customers should only have access to
+    // view their portal/dashboard."
+    //
+    // In the database that means staff reach customer rows only through an
+    // active impersonation grant (0013/0014) — a named org, a typed reason, an
+    // expiry inside 60 minutes, and a permanent audit row. No grant, no rows.
+    //
+    // These probes run as a real signed-in staff session against the real API.
+    // The staff actor is a member of NO org, so every row it sees arrives
+    // through a staff policy and nothing else.
+
+    describe('staff (support) — JWT', () => {
+      it('carries platform_role and no tenant claims', () => {
+        const claims = decodeJwtClaims(world.staff.accessToken);
+        expect(
+          claims['platform_role'],
+          'no platform_role claim — app_metadata is not reaching the JWT, so ' +
+            'app.is_staff() is false and every staff probe below is vacuous. ' +
+            'Check the access-token hook (migrations/0005_auth_claims_hook.sql).',
+        ).toBe('support');
+        // A staff account is not a tenant. If it picked up an org_id the probes
+        // below would pass through the MEMBER policies and prove nothing.
+        expect(claims['org_id'], 'the staff fixture joined an org').toBeUndefined();
+        expect(claims['member_role']).toBeUndefined();
+      });
+    });
+
+    describe.each(STAFF_SCOPED_RELATIONS as ScopedRelation[])(
+      '$table (staff, no grant)',
+      (t) => {
+        it(
+          'reads zero rows of either tenant',
+          async () => {
+            // Ground truth: the rows are really there. Without this an empty
+            // result would be indistinguishable from an empty table.
+            const truthA = await countRows(t.table, t.column, world.orgA.orgId);
+            const truthB = await countRows(t.table, t.column, world.orgB.orgId);
+
+            const a = await world.staff.client
+              .from(t.table)
+              .select('*')
+              .eq(t.column, world.orgA.orgId);
+            const b = await world.staff.client
+              .from(t.table)
+              .select('*')
+              .eq(t.column, world.orgB.orgId);
+
+            expect(a.error, `${t.table}: staff SELECT errored`).toBeNull();
+            expect(b.error, `${t.table}: staff SELECT errored`).toBeNull();
+            expect(
+              a.data ?? [],
+              `${t.table}: LEAK — a staff session with NO support session read ` +
+                `${a.data?.length ?? 0} of org A's ${truthA} rows`,
+            ).toEqual([]);
+            expect(
+              b.data ?? [],
+              `${t.table}: LEAK — a staff session with NO support session read ` +
+                `${b.data?.length ?? 0} of org B's ${truthB} rows`,
+            ).toEqual([]);
+          },
+          NET,
+        );
+      },
+    );
+
+    // The 0018 roster is the deliberate hole in "staff see nothing without a
+    // grant", and it is asserted in BOTH directions because each direction is a
+    // real failure that has already happened once.
+    //
+    // Too narrow: 0015 grant-scoped orgs and farms, so staff saw zero accounts
+    // and could never open a support session on one — /admin went from leaking
+    // every tenant to showing nothing, with no way back.
+    //
+    // Too wide: the leak this whole exercise exists to close.
+    describe('the 0018 roster (staff, no grant)', () => {
+      it.each(ROSTER_RELATIONS as ScopedRelation[])(
+        '$table — visible without a grant, because the console cannot bootstrap otherwise',
+        async (t) => {
+          const truth = await countRows(t.table, t.column, world.orgA.orgId);
+          expect(truth, `${t.table}: fixture has no org A rows, so this proves nothing`).toBeGreaterThan(0);
+
+          const res = await world.staff.client.from(t.table).select('*').eq(t.column, world.orgA.orgId);
+          expect(res.error, `${t.table}: roster SELECT errored`).toBeNull();
+          expect(
+            res.data?.length ?? 0,
+            `${t.table}: staff read ${res.data?.length ?? 0} of ${truth} rows without a grant. ` +
+              `If this is zero, /admin is DEAD — you cannot open a support session on an ` +
+              `account you cannot see, and creating the grant needs the org to be visible.`,
+          ).toBe(truth);
+        },
+        NET,
+      );
+
+      it(
+        'is exactly orgs and farms — nothing else is readable without a grant',
+        async () => {
+          // Guards the other direction: a future migration that adds
+          // `or app.is_staff()` to some third table's read policy would be
+          // caught here rather than by a customer.
+          const leaked: string[] = [];
+          for (const t of STAFF_SCOPED_RELATIONS as ScopedRelation[]) {
+            const res = await world.staff.client
+              .from(t.table)
+              .select('*')
+              .eq(t.column, world.orgA.orgId)
+              .limit(1);
+            if ((res.data?.length ?? 0) > 0) leaked.push(t.table);
+          }
+          expect(
+            leaked,
+            `these are readable by staff with NO support session, and are not the roster: ` +
+              `${leaked.join(', ')}. The roster is orgs and farms only — everything a rancher ` +
+              `would call theirs stays behind the grant.`,
+          ).toEqual([]);
+        },
+        NET * 3,
+      );
+    });
+
+    describe('staff with a grant on org A', () => {
+      let grant: Grant;
+
+      beforeAll(async () => {
+        grant = await startGrant(world, world.orgA.orgId, 'rls suite scope probe on org A');
+      }, NET);
+
+      afterAll(async () => {
+        if (grant) await endGrant(world, grant);
+      }, NET);
+
+      it.each(STAFF_SCOPED_RELATIONS as ScopedRelation[])(
+        '$table — org A rows visible, org B rows still zero',
+        async (t) => {
+          const truthA = await countRows(t.table, t.column, world.orgA.orgId);
+          const truthB = await countRows(t.table, t.column, world.orgB.orgId);
+
+          const a = await world.staff.client
+            .from(t.table)
+            .select('*')
+            .eq(t.column, world.orgA.orgId);
+          expect(a.error, `${t.table}: scoped staff SELECT errored`).toBeNull();
+          expect(
+            a.data?.length ?? 0,
+            `${t.table}: a support session on org A sees ${a.data?.length ?? 0} of ` +
+              `its ${truthA} rows. Staff must be able to read what they may write, ` +
+              `or withAudit()'s .select() logs <action>:failed after a successful write.`,
+          ).toBe(truthA);
+
+          const b = await world.staff.client
+            .from(t.table)
+            .select('*')
+            .eq(t.column, world.orgB.orgId);
+          expect(b.error, `${t.table}: cross-tenant staff SELECT errored`).toBeNull();
+          expect(
+            b.data ?? [],
+            `${t.table}: LEAK — a grant on org A reached ${b.data?.length ?? 0} of ` +
+              `org B's ${truthB} rows. The grant names ONE org.`,
+          ).toEqual([]);
+        },
+        NET,
+      );
+
+      it(
+        'a write inside the grant returns its row through .select()',
+        async () => {
+          // This is the exact call shape lib/admin/audit.ts uses. If the write
+          // predicate is broader than the read predicate the UPDATE succeeds and
+          // this comes back empty, and the console records `<action>:failed`
+          // while the customer's data has in fact changed.
+          const { data, error } = await world.staff.client
+            .from('alerts')
+            .update({ severity: 'info' })
+            .eq('org_id', world.orgA.orgId)
+            .select();
+
+          expect(error, `staff UPDATE under a grant failed: ${error?.message}`).toBeNull();
+          expect(
+            data?.length ?? 0,
+            'the write landed but returned no rows — audit_log would record a ' +
+              'failure for a change that really happened',
+          ).toBeGreaterThan(0);
+
+          // and it really is the customer's row that changed
+          const after = await world.service
+            .from('alerts')
+            .select('severity')
+            .eq('org_id', world.orgA.orgId);
+          expect((after.data ?? []).every((r) => (r as { severity: string }).severity === 'info'))
+            .toBe(true);
+        },
+        NET,
+      );
+
+      it(
+        'still cannot write org B',
+        async () => {
+          const before = await snapshot('alerts', 'org_id', world.orgB.orgId);
+          expect(before.length).toBeGreaterThan(0);
+
+          const upd = await world.staff.client
+            .from('alerts')
+            .update({ severity: 'info' })
+            .eq('org_id', world.orgB.orgId)
+            .select();
+          expect(upd.data ?? [], 'a grant on org A changed org B rows').toEqual([]);
+
+          const ins = await world.staff.client.from('alerts').insert({
+            org_id: world.orgB.orgId,
+            farm_id: world.orgB.farmId,
+            kind: 'trough_low',
+            severity: 'critical',
+            dedup_key: `${world.runId}-staff-attack`,
+          });
+          expect(ins.error?.code, 'a grant on org A planted an alert in org B').toBe(RLS_DENIED);
+
+          expect(
+            await snapshot('alerts', 'org_id', world.orgB.orgId),
+            'org B alerts changed under a grant scoped to org A',
+          ).toEqual(before);
+        },
+        NET,
+      );
+    });
+
+    describe('staff after the grant is closed', () => {
+      it(
+        'goes back to zero rows',
+        async () => {
+          const grant = await startGrant(world, world.orgA.orgId, 'rls suite grant lifecycle');
+          const open = await world.staff.client
+            .from('map_features')
+            .select('id')
+            .eq('org_id', world.orgA.orgId);
+          expect(open.data?.length ?? 0, 'the grant never took effect').toBeGreaterThan(0);
+
+          await endGrant(world, grant);
+
+          const closed = await world.staff.client
+            .from('map_features')
+            .select('id')
+            .eq('org_id', world.orgA.orgId);
+          expect(
+            closed.data ?? [],
+            'ending the support session did not revoke the scope — the grant is ' +
+              'read fresh from audit_log on every query, so an `impersonation.end` ' +
+              'row must take effect immediately',
+          ).toEqual([]);
         },
         NET,
       );

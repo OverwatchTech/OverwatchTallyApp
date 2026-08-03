@@ -1,10 +1,19 @@
 // /farms/[farmId]/feed — dispensed vs scheduled, adherence, ration cost,
 // hay inventory. Server component; charts hydrate client-side. Semantics:
-// measured feed renders teal/mono, projections (days on hand, estimated
+// measured feed renders teal/mono, projections (days of feed, estimated
 // cost) render hay and say "estimated", alert appears only when something
 // is actually wrong (a missed feeding).
+//
+// The days-of-feed figure is the SHARED one — `computeDaysOfFeed` in
+// lib/ops/days-of-feed.ts, dry-matter and waste applied before the division,
+// the same rate window and waste factor as the farm overview and the forecast
+// screen. This screen used to divide raw as-fed tonnage by its own trailing
+// 7-day average, which read weeks longer than the forecast screen and the alert
+// that links here. The full treatment is one click away, and the card says so.
 
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { RATE_WINDOW_DAYS } from '@overwatch/forecast';
 import { createClient } from '@/lib/supabase/server';
 import { claimsFromSession, isManagerOrOwner } from '@/lib/auth/claims';
 import { formatMeasure } from '@overwatch/ui';
@@ -19,13 +28,21 @@ import {
   adherenceByDay,
   costRollup,
   dailyDispensedByPen,
-  daysOnHand,
   inventoryLines,
-  lastNDayKeys,
+  measuredRate,
   pensInEvents,
+  rateDayKeys,
   scheduledKgPerDay,
   parseWindows,
 } from '@/lib/ops/feed';
+import {
+  computeDaysOfFeed,
+  daysBandLabel,
+  fetchCentroid,
+  fetchWasteFactors,
+  resolveWasteFactor,
+} from '@/lib/ops/days-of-feed';
+import { fetchWeatherWindow } from '@/lib/ops/weather';
 import { clockTime, dayLabel } from '@/lib/ops/tz';
 import { FeedChart, type FeedChartRow } from './feed-chart';
 import { SetScheduleForm } from './set-schedule-form';
@@ -60,22 +77,34 @@ export default async function FeedPage({ params }: { params: Promise<{ farmId: s
   } = await supabase.auth.getSession();
   const canManage = isManagerOrOwner(claimsFromSession(session).memberRole);
 
-  const since = new Date(Date.now() - (WINDOW_DAYS + 1) * 86_400_000);
-  const [features, feed, herd] = await Promise.all([
+  // +2: the chart shows WINDOW_DAYS, and the rate needs one bucket more than
+  // that (`rateDayKeys` — today is fetched and then discarded as partial).
+  const since = new Date(Date.now() - (WINDOW_DAYS + 2) * 86_400_000);
+  const [features, feed, herd, wasteRows, centroid] = await Promise.all([
     fetchFeatureIndex(supabase, farmId),
     fetchFeedData(supabase, farmId, since.toISOString()),
     fetchHerdData(supabase, farmId),
+    fetchWasteFactors(supabase, farmId),
+    fetchCentroid(supabase, farmId),
   ]);
+  const weather =
+    centroid === null ? null : await fetchWeatherWindow(centroid.lat, centroid.lon);
 
   const tz = farm.timezone;
-  const days = lastNDayKeys(tz, WINDOW_DAYS);
+  // `rateDayKeys` is RATE_WINDOW_DAYS complete days plus today. The rate reads
+  // all of it (and drops today); the chart and the adherence table show the
+  // WINDOW_DAYS most recent, today included, because a crew wants to see
+  // whether this morning's feeding landed.
+  const days = rateDayKeys(tz);
   const daily = dailyDispensedByPen(feed.events, tz, days);
+  const shownDays = days.slice(-WINDOW_DAYS);
+  const shownDaily = daily.slice(-WINDOW_DAYS);
   const penIds = pensInEvents(feed.events);
   const penName = (id: string) =>
     id === 'unassigned' ? 'Unassigned' : (features.get(id)?.name ?? 'Unknown pen');
 
   // Chart rows: pen names verbatim as series keys, scheduled target per day.
-  const chartRows: FeedChartRow[] = daily.map((d) => {
+  const chartRows: FeedChartRow[] = shownDaily.map((d) => {
     const row: FeedChartRow = {
       label: dayLabel(d.day),
       scheduled: scheduledKgPerDay(feed.schedules, d.day),
@@ -91,7 +120,7 @@ export default async function FeedPage({ params }: { params: Promise<{ farmId: s
   // Adherence — honest when no schedule exists.
   const hasSchedule = feed.schedules.length > 0;
   const adherence = hasSchedule
-    ? adherenceByDay(feed.events, feed.schedules, tz, days)
+    ? adherenceByDay(feed.events, feed.schedules, tz, shownDays)
     : [];
   const adherenceColumns = feed.schedules.flatMap((s) =>
     parseWindows(s.windows).map((w) => ({
@@ -103,10 +132,19 @@ export default async function FeedPage({ params }: { params: Promise<{ farmId: s
     })),
   );
 
-  // Cost + inventory.
+  // Cost + inventory. `daysOfFeed` is not this screen's own arithmetic: it is
+  // the shared computation the overview and the forecast screen both render,
+  // so all three say the same thing about the same stack at the same moment.
   const lines = inventoryLines(feed.inventory, feed.baleTypes, feed.calibrations);
-  const rollup = costRollup(lines, daily, herd.currentHeadTotal);
-  const onHand = daysOnHand(lines, rollup.recentDailyKg);
+  const rate = measuredRate(daily);
+  const rollup = costRollup(lines, rate.kgPerDay, herd.currentHeadTotal);
+  const daysOfFeed = computeDaysOfFeed({
+    lines,
+    daily,
+    waste: resolveWasteFactor(wasteRows),
+    weather,
+  });
+  const band = daysBandLabel(daysOfFeed.leading);
 
   const todayKg = daily[daily.length - 1]?.totalKg ?? 0;
 
@@ -130,26 +168,36 @@ export default async function FeedPage({ params }: { params: Promise<{ farmId: s
         </div>
         <div className="rounded-lg border border-hairline bg-card p-4">
           <p className="text-xs text-muted">Ration cost / day</p>
-          <p className="machine mt-1 text-lg text-[#E8B64C]">
+          <p className="machine mt-1 text-lg text-hay">
             {rollup.estCostPerDay !== null ? usd(rollup.estCostPerDay, 0) : '—'}
           </p>
-          <p className="text-xs text-[#E8B64C]/70">estimated</p>
+          <p className="text-xs text-hay/70">estimated</p>
         </div>
         <div className="rounded-lg border border-hairline bg-card p-4">
           <p className="text-xs text-muted">Cost / head / day</p>
-          <p className="machine mt-1 text-lg text-[#E8B64C]">
+          <p className="machine mt-1 text-lg text-hay">
             {rollup.estCostPerHeadPerDay !== null ? usd(rollup.estCostPerHeadPerDay) : '—'}
           </p>
-          <p className="text-xs text-[#E8B64C]/70">
+          <p className="text-xs text-hay/70">
             estimated{rollup.headCount !== null ? ` · ${rollup.headCount} head` : ''}
           </p>
         </div>
         <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Days on hand</p>
-          <p className="machine mt-1 text-lg text-[#E8B64C]">
-            {onHand !== null ? onHand.toFixed(0) : '—'}
+          <p className="text-xs text-muted">Days of feed on hand</p>
+          <p className="machine mt-1 text-lg text-hay">
+            {daysOfFeed.leading.days !== null ? daysOfFeed.leading.days.toFixed(1) : '—'}
           </p>
-          <p className="text-xs text-[#E8B64C]/70">projected at the recent feed rate</p>
+          <p className="text-xs text-hay/70">
+            {band !== null ? `projected · ${band}` : 'projected at the recent feed rate'}
+          </p>
+          <p className="mt-1 text-xs text-faint">
+            <Link
+              href={`/farms/${farm.id}/forecast`}
+              className="underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              What went into this
+            </Link>
+          </p>
         </div>
       </section>
 
@@ -258,8 +306,10 @@ export default async function FeedPage({ params }: { params: Promise<{ farmId: s
           <h2 className="text-base font-medium">Hay on hand</h2>
           {rollup.recentDailyKg !== null && (
             <p className="machine text-xs text-muted">
-              feeding {formatMeasure(rollup.recentDailyKg, 'kg', { digits: 0 })}/day over the last 7
-              days
+              feeding {formatMeasure(rollup.recentDailyKg, 'kg', { digits: 0 })}/day over{' '}
+              {rate.daysCounted === RATE_WINDOW_DAYS
+                ? `the last ${RATE_WINDOW_DAYS} days`
+                : `the ${rate.daysCounted} logged ${rate.daysCounted === 1 ? 'day' : 'days'} in the last ${RATE_WINDOW_DAYS}`}
             </p>
           )}
         </div>
