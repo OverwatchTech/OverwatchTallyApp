@@ -25,21 +25,59 @@ export default async function FarmPage({ params }: { params: Promise<{ farmId: s
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="type-display text-xl">{farm.name}</h1>
-          <p className="machine mt-2 text-xs text-muted">
-            {farm.status}
-            {farm.subscription_tier ? ` · ${formatTier(farm.subscription_tier)}` : ''}
-            {` · ${farm.timezone}`}
-          </p>
-        </div>
-        <Link
-          href={`/farms/${farm.id}/map`}
-          className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
-        >
-          Open map
-        </Link>
+      <header>
+        <h1 className="type-display text-xl">{farm.name}</h1>
+        <p className="machine mt-2 text-xs text-muted">
+          {farm.status}
+          {farm.subscription_tier ? ` · ${formatTier(farm.subscription_tier)}` : ''}
+          {` · ${farm.timezone}`}
+        </p>
+        {/* Quiet map links. Import and boundary are manager surfaces, so the
+            links only show when they'd work; Download streams the caller's
+            RLS-scoped view of the map from the KML route. */}
+        <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
+          <Link
+            href={`/farms/${farm.id}/map`}
+            className="transition-colors hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            Open map
+          </Link>
+          {canEdit && (
+            <>
+              <span aria-hidden className="text-faint">
+                ·
+              </span>
+              <Link
+                href={`/farms/${farm.id}/import`}
+                className="transition-colors hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                Import KML
+              </Link>
+            </>
+          )}
+          <span aria-hidden className="text-faint">
+            ·
+          </span>
+          <a
+            href={`/api/farms/${farm.id}/kml`}
+            className="transition-colors hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            Download KML
+          </a>
+          {canEdit && (
+            <>
+              <span aria-hidden className="text-faint">
+                ·
+              </span>
+              <Link
+                href={`/farms/${farm.id}/boundary`}
+                className="transition-colors hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                Set boundary
+              </Link>
+            </>
+          )}
+        </p>
       </header>
 
       <section className="rounded-lg border border-hairline bg-card p-6">
