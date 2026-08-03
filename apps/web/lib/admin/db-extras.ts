@@ -63,8 +63,15 @@ interface NarrowBuilder<Row> {
   ): { select(columns: string): { single(): Promise<Result<{ farm_id: string }>> } };
 }
 
+// .bind(supabase) is load-bearing, not style. `supabase.from` reads `this.rest`
+// internally, so detaching it into a bare const and calling it drops the
+// receiver and throws at REQUEST time — while typecheck, lint, and build all
+// pass, because the cast erases the method's `this` before the compiler can
+// object. Nothing catches this except loading the page.
 function table<Row>(supabase: AdminClient, name: CredentialTable): NarrowBuilder<Row> {
-  const from = supabase.from as unknown as (relation: string) => NarrowBuilder<Row>;
+  const from = supabase.from.bind(supabase) as unknown as (
+    relation: string,
+  ) => NarrowBuilder<Row>;
   return from(name);
 }
 
