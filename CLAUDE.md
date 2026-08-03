@@ -93,6 +93,7 @@ packages/forecast   pure analytics functions, no I/O, exhaustively tested
 packages/ui         shared components + design tokens
 supabase/functions  mdp-webhook, stripe-webhook
 services/segment    FastAPI + SAM 2 (Modal)
+tools/simulator     virtual device fleet for demos (docs/SIMULATOR.md)
 docs                ARCHITECTURE, DATA-MODEL, ROADMAP, runbooks
 ```
 
@@ -104,6 +105,19 @@ pnpm dev            # apps/web dev server
 pnpm test           # vitest across packages
 pnpm e2e            # playwright
 pnpm db:types       # regenerate Supabase types into packages/db (arrives in Phase 1)
+
+node tools/simulator/src/cli.ts --plan        # virtual fleet the layout implies
+node tools/simulator/src/cli.ts --backfill 30 # demo history (docs/SIMULATOR.md)
+node tools/simulator/src/cli.ts --live        # demo fleet, live, via mdp-webhook
 ```
 
 (Keep this section current as phases land.)
+
+## Deleting from a partitioned table
+
+`readings`, `raw_events` and `tracker_positions` are range-partitioned by
+month. `ctid` is unique only **within** a partition — and a bare id list or a
+`LIMIT` is no safer — so a delete predicated on one of those reaches across
+partitions and takes other tenants' rows with it. This has already destroyed
+data on this project. Every `DELETE` against these tables must carry an
+explicit `org_id` or `farm_id` predicate **in the same statement**.
