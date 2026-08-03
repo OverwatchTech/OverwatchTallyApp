@@ -5,6 +5,11 @@
 // is. So this screen is the one delivery channel that always works, with no
 // credentials, and it is written to be worth reading on its own.
 //
+// EVERY OPEN ALERT SHOWS ITS EVIDENCE. What fired, where, the numbers that
+// tripped it, the line they crossed, and which rule was responsible — see
+// evidence.tsx. An alert a rancher cannot argue with is an alert a rancher
+// stops reading.
+//
 // Staff-only alerts (ARCHITECTURE §11 — MDP system messages, ingest health,
 // fleet anomalies) never appear here. The RLS policy hides them and
 // `fetchOpenAlerts` filters them again.
@@ -14,7 +19,7 @@
 
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
-import { claimsFromSession } from '@/lib/auth/claims';
+import { claimsFromSession, isManagerOrOwner } from '@/lib/auth/claims';
 import { describeAlert, severityClass, severityLabel } from '@/lib/alerts/kinds';
 import {
   deliverySummary,
@@ -26,23 +31,37 @@ import {
   whenLabel,
   type AlertWithFarm,
 } from '@/lib/alerts/queries';
+import { fetchRecipients, toContacts, type Contact } from '@/lib/alerts/recipients';
+import { fetchRules, ruleIndex, type RuleRow } from '@/lib/alerts/rules-db';
 import { AcknowledgeForm } from './acknowledge-form';
+import { DeliveryLog, TrippedBy } from './evidence';
 
 /** Crew and up may acknowledge; a viewer reads. RLS is the enforcement. */
 const ACK_ROLES = new Set(['owner', 'manager', 'crew']);
 
 function AlertCard({
   alert,
+  rule,
+  contacts,
   canAcknowledge,
+  canEditRules,
   showFarm,
 }: {
   alert: AlertWithFarm;
+  rule: RuleRow | null;
+  contacts: readonly Contact[];
   canAcknowledge: boolean;
+  canEditRules: boolean;
   showFarm: boolean;
 }) {
-  const copy = describeAlert(alert.kind, alert.details as Record<string, unknown> | null);
+  const copy = describeAlert(
+    alert.kind,
+    alert.details as Record<string, unknown> | null,
+    alert.timezone,
+  );
   const acknowledged = alert.acknowledged_at !== null;
-  const delivery = deliverySummary(receiptsOf(alert));
+  const receipts = receiptsOf(alert);
+  const delivery = deliverySummary(receipts);
 
   return (
     <article className="rounded-lg border border-hairline bg-card p-5">
@@ -75,20 +94,14 @@ function AlertCard({
         </div>
       </div>
 
-      {copy.facts.length > 0 && (
-        <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 border-t border-hairline pt-3 sm:grid-cols-3 lg:grid-cols-4">
-          {copy.facts.map((f) => (
-            <div key={f.label}>
-              <dt className="text-xs text-faint">{f.label}</dt>
-              <dd className="machine mt-0.5 text-sm text-foreground">{f.value}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
+      <TrippedBy facts={copy.facts} rule={rule} canEdit={canEditRules} />
 
-      {delivery !== null && (
-        <p className="machine mt-3 text-xs text-faint">Sent: {delivery}</p>
-      )}
+      <DeliveryLog
+        receipts={receipts}
+        contacts={contacts}
+        timezone={alert.timezone}
+        summary={delivery}
+      />
 
       {alert.kind === 'days_on_hand_low' && (
         <Link
@@ -110,25 +123,44 @@ export default async function AlertsPage() {
   } = await supabase.auth.getSession();
   const claims = claimsFromSession(session);
   const canAcknowledge = claims.memberRole !== null && ACK_ROLES.has(claims.memberRole);
+  const canEditRules = isManagerOrOwner(claims.memberRole);
 
   const farms = await fetchFarmIndex(supabase);
-  const [open, history] = await Promise.all([
+  const [open, history, rules, recipients] = await Promise.all([
     fetchOpenAlerts(supabase, farms),
     fetchAlertHistory(supabase, farms),
+    fetchRules(supabase),
+    fetchRecipients(supabase),
   ]);
+  const rulesById = ruleIndex(rules);
+  const contacts = toContacts(recipients);
   const showFarm = farms.size > 1;
 
   const unacknowledged = open.filter((a) => a.acknowledged_at === null).length;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
-      <header>
-        <h1 className="type-display text-xl">Alerts</h1>
-        <p className="machine mt-2 text-xs text-muted">
-          {open.length === 0
-            ? 'nothing open'
-            : `${open.length} open · ${unacknowledged} not yet acknowledged`}
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="type-display text-xl">Alerts</h1>
+          <p className="machine mt-2 text-xs text-muted">
+            {open.length === 0
+              ? 'nothing open'
+              : `${open.length} open · ${unacknowledged} not yet acknowledged`}
+          </p>
+          <p className="mt-2 max-w-2xl text-xs text-faint">
+            Everything that fires lands on this screen at the moment it fires. Quiet hours hold back
+            the text message, never the record — an alert opened at 02:00 is here, timed 02:00.
+          </p>
+        </div>
+        {canEditRules && (
+          <Link
+            href="/settings/notifications"
+            className="shrink-0 rounded border border-hairline px-2 py-1 text-xs text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            Who gets told
+          </Link>
+        )}
       </header>
 
       <section className="space-y-3">
@@ -137,7 +169,10 @@ export default async function AlertsPage() {
             <AlertCard
               key={alert.id}
               alert={alert}
+              rule={alert.rule_id === null ? null : (rulesById.get(alert.rule_id) ?? null)}
+              contacts={contacts}
               canAcknowledge={canAcknowledge}
+              canEditRules={canEditRules}
               showFarm={showFarm}
             />
           ))
@@ -145,8 +180,18 @@ export default async function AlertsPage() {
           <div className="rounded-lg border border-hairline bg-card p-6">
             <h2 className="mb-1 text-base font-medium">Nothing needs attention</h2>
             <p className="text-sm text-muted">
-              When something on the ranch goes wrong, it shows up here — and on the phone numbers
-              and mailboxes set up for this operation.
+              When something on the ranch goes wrong it shows up here, the moment it happens, day or
+              night.{' '}
+              {canEditRules ? (
+                <Link
+                  href="/settings/notifications"
+                  className="text-accent underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  Set who else gets told
+                </Link>
+              ) : (
+                'Ask your manager who else gets told.'
+              )}
             </p>
           </div>
         )}
@@ -200,8 +245,8 @@ export default async function AlertsPage() {
             </table>
             <p className="mt-3 text-xs text-faint">
               An alert clears on its own when the condition it watches goes away. Acknowledging
-              stops the calls and texts; it does not close the alert, because saying you know about
-              low water is not the same as water in the trough.
+              stops the chain from moving on to the next person; it does not close the alert,
+              because saying you know about low water is not the same as water in the trough.
             </p>
           </div>
         ) : (

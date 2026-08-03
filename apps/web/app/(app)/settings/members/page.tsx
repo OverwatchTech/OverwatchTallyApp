@@ -25,9 +25,9 @@ export default async function MembersPage() {
     .order("created_at");
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="space-y-6">
       <header>
-        <h1 className="type-display text-xl">Members</h1>
+        <h2 className="text-base font-medium">Members</h2>
         <p className="mt-2 text-sm text-muted">
           Everyone with access to this operation.
           {isOwner

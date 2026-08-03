@@ -19,6 +19,8 @@ type Client = SupabaseClient<Database>;
 export interface AlertRow {
   id: string;
   farm_id: string;
+  /** Null when the row was opened outside the rules engine (the webhook). */
+  rule_id: string | null;
   kind: string;
   severity: Severity;
   opened_at: string;
@@ -42,7 +44,7 @@ export interface AlertWithFarm extends AlertRow {
 }
 
 const COLUMNS =
-  'id, farm_id, kind, severity, opened_at, acknowledged_at, acknowledged_by, resolved_at, dedup_key, details, deliveries';
+  'id, farm_id, rule_id, kind, severity, opened_at, acknowledged_at, acknowledged_by, resolved_at, dedup_key, details, deliveries';
 
 /** Details as a plain record, whatever jsonb actually landed in the column. */
 export function detailsOf(row: { details: Json | null }): Record<string, unknown> {

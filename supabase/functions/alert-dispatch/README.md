@@ -3,6 +3,12 @@
 Sends open alerts out over SMS (Twilio) and email (Resend), honours quiet
 hours and the escalation chain, and appends a receipt for every attempt.
 
+> **Status: written, type-checks, NOT deployed, no provider credentials.**
+> Every unsupplied value is marked `SET BEFORE LAUNCH` in the code.
+> **[`docs/ALERT-DISPATCH.md`](../../../docs/ALERT-DISPATCH.md)** is the list
+> of what the owner must decide and supply — accounts, secrets, console
+> steps, scheduler, and what it costs per message at a realistic alert volume.
+
 **It does not open alerts.** `app.evaluate_alert_rules()` does, on pg_cron,
 every five minutes (migration `0011_alert_rules_engine.sql`). That function
 also writes the in-app delivery receipt at open, which is why **in-app

@@ -70,9 +70,18 @@ interface Config {
 
 function readConfig(): { config: Config | null; missing: string[] } {
   const missing: string[] = [];
+  // Injected by the platform on every edge function.
   const baseUrl = Deno.env.get('SUPABASE_URL');
   const apiKey = Deno.env.get('SUPABASE_ANON_KEY');
+  // SET BEFORE LAUNCH — ALERT_DISPATCH_JWT. A JWT signed with the project's
+  // JWT secret carrying {"role":"alert_dispatcher"}. Not set today, so this
+  // function answers 503 and never reaches the database. How to mint it:
+  // docs/ALERT-DISPATCH.md §3.
   const dispatchJwt = Deno.env.get('ALERT_DISPATCH_JWT');
+  // SET BEFORE LAUNCH — ALERT_DISPATCH_TOKEN. The shared secret the scheduler
+  // presents as `x-alert-dispatch-token`. Supabase's own JWT check accepts the
+  // anon key, which is public, so it is not a gate for a function that sends
+  // text messages. Not set today. docs/ALERT-DISPATCH.md §3.
   const callerToken = Deno.env.get('ALERT_DISPATCH_TOKEN');
 
   if (!baseUrl) missing.push('SUPABASE_URL');

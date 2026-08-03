@@ -37,6 +37,10 @@ function env(key: string): string | undefined {
 export function readRails(): Rails {
   const missing: string[] = [];
 
+  // SET BEFORE LAUNCH — TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN,
+  // TWILIO_FROM_NUMBER. None are set on the project today, so every SMS
+  // records `unconfigured` and no text message goes out. What the owner must
+  // supply, from which console, and what it costs: docs/ALERT-DISPATCH.md §1.
   const accountSid = env('TWILIO_ACCOUNT_SID');
   const authToken = env('TWILIO_AUTH_TOKEN');
   const fromNumber = env('TWILIO_FROM_NUMBER');
@@ -48,8 +52,15 @@ export function readRails(): Rails {
       ? { accountSid, authToken, fromNumber }
       : null;
 
+  // SET BEFORE LAUNCH — RESEND_API_KEY. Not set today; every email records
+  // `unconfigured`. See docs/ALERT-DISPATCH.md §2.
   const apiKey = env('RESEND_API_KEY');
   if (apiKey === undefined) missing.push('RESEND_API_KEY');
+  // SET BEFORE LAUNCH — RESEND_FROM. The fallback below names a mailbox on
+  // overwatchtally.com that does not exist yet. Resend refuses to send from
+  // an unverified domain, so leaving this alone does not silently send from
+  // the wrong address — it fails and records `failed`. Verify the domain and
+  // create the mailbox before launch (docs/ALERT-DISPATCH.md §2, §5).
   const resend =
     apiKey !== undefined
       ? { apiKey, from: env('RESEND_FROM') ?? 'Overwatch Tally <alerts@overwatchtally.com>' }
