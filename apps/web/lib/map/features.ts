@@ -91,6 +91,24 @@ export async function fetchMapFeatures(
   return (data ?? []) as unknown as MapFeatureRow[];
 }
 
+/** One feature through the same view (RLS applies); null when not visible. */
+export async function fetchMapFeatureRow(
+  supabase: SupabaseClient<Database>,
+  featureId: string,
+): Promise<MapFeatureRow | null> {
+  const client = supabase as unknown as SupabaseClient;
+  const { data, error } = await client
+    .from('map_features_geojson')
+    .select(VIEW_COLUMNS)
+    .eq('id', featureId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Map feature failed to load: ${error.message}`);
+  }
+  return (data as unknown as MapFeatureRow) ?? null;
+}
+
 export function toFeatureCollection(rows: MapFeatureRow[]): MapFeatureCollection {
   return {
     type: 'FeatureCollection',

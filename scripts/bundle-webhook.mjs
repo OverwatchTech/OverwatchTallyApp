@@ -16,6 +16,7 @@ const result = await build({
   target: 'esnext',
   platform: 'neutral',
   minify: true,
+  lineLimit: 400,
   legalComments: 'none',
   outfile: `${root}supabase/functions/mdp-webhook/dist/index.js`,
   logLevel: 'info',
