@@ -1,0 +1,145 @@
+# test-requests.http — live integration script for mdp-webhook.
+#
+# Curl examples, runnable top to bottom in bash against a deployed function.
+# Each scenario states the expected HTTP status (bodies are always empty) and
+# the SQL that proves the effect. These become the Phase 4 acceptance run,
+# then get repeated from MDP virtual devices + Device Debug Panel (§4.3).
+#
+# ── setup ────────────────────────────────────────────────────────────────────
+#
+#   BASE="https://lropxenygvybctvaspxm.supabase.co/functions/v1/mdp-webhook"
+#   TOKEN="$(psql ... -c "select webhook_token from farms where name='Demo Ranch'")"
+#
+# Seed one test device for the farm (internal vocabulary — admin/SQL only;
+# there is no self-serve device path):
+#
+#   insert into devices (org_id, farm_id, dev_eui, model, role, status)
+#   select org_id, id, '24E124707E051234', 'EM400-UDL', 'trough_level', 'live'
+#   from farms where name = 'Demo Ranch';
+#
+# Pre-deploy migration must have run:
+#   alter type alert_kind_t add value if not exists 'mdp_system_messages';
+
+### 1. Valid PROPERTY reading — the normal case
+# expect: 200
+curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+  "eventID": "11111111-0000-4000-8000-000000000001",
+  "eventCreatedTime": "1742872448",
+  "eventVersion": "1.0",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": {
+      "deviceId": "1904371063669395457",
+      "sn": "6707E04610160001",
+      "devEUI": "24E124707E051234",
+      "name": "Trough NW",
+      "model": "EM400-UDL"
+    },
+    "type": "PROPERTY",
+    "tslID": "",
+    "payload": { "distance": 1250, "temperature": 12.5, "battery": 98, "position": "normal" }
+  }
+}'
+# verify:
+#   select status from raw_events where mdp_event_id = '11111111-0000-4000-8000-000000000001';
+#     -- 'normalized'
+#   select metric, value, value_text, received_at, event_created_time
+#   from readings where mdp_event_id = '11111111-0000-4000-8000-000000000001';
+#     -- raw_distance 1250 · raw_temperature 12.5 · raw_battery 98 ·
+#     -- raw_position 'normal'; event_created_time = 2025-03-25T03:14:08Z,
+#     -- received_at = now-ish (both stored — §5.6)
+
+### 2. Replay — same eventID again (MDP retries are expected)
+# expect: 200, and NO new rows anywhere
+curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+  "eventID": "11111111-0000-4000-8000-000000000001",
+  "eventCreatedTime": "1742872448",
+  "eventVersion": "1.0",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": { "devEUI": "24E124707E051234", "model": "EM400-UDL" },
+    "type": "PROPERTY",
+    "payload": { "distance": 9999 }
+  }
+}'
+# verify:
+#   select count(*) from raw_events where mdp_event_id = '11111111-0000-4000-8000-000000000001';  -- still 1
+#   select count(*) from readings   where mdp_event_id = '11111111-0000-4000-8000-000000000001' and value = 9999;  -- 0
+
+### 3. Unknown devEUI — logged and dropped, never auto-created
+# expect: 200 (raw is persisted; the drop happens at normalization)
+curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+  "eventID": "11111111-0000-4000-8000-000000000003",
+  "eventCreatedTime": "1742872500",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": { "devEUI": "24E124FFFFFF9999", "model": "EM400-UDL" },
+    "type": "PROPERTY",
+    "payload": { "distance": 500 }
+  }
+}'
+# verify:
+#   select status from raw_events where mdp_event_id = '11111111-0000-4000-8000-000000000003';  -- 'ignored'
+#   select count(*) from devices where dev_eui = '24E124FFFFFF9999';  -- 0 (NEVER auto-created)
+#   function logs show evt=unknown_dev_eui_dropped with a running total
+
+### 4. Unknown token
+# expect: 404, empty body (reason in logs only; nothing echoed)
+curl -si -X POST "$BASE/000000000000000000000000000000000000000000000000" \
+  -H 'Content-Type: application/json' -d '{
+  "eventID": "11111111-0000-4000-8000-000000000004",
+  "eventCreatedTime": "1742872500",
+  "eventType": "DEVICE_DATA",
+  "data": { "deviceProfile": { "devEUI": "24E124707E051234" }, "type": "PROPERTY", "payload": {} }
+}'
+# verify: no rows created anywhere; logs show evt=reject reason=unknown_token
+
+### 5. Malformed envelope — missing eventID
+# expect: 400, empty body, no DB writes (validation precedes any DB touch)
+curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+  "eventCreatedTime": "1742872500",
+  "eventType": "DEVICE_DATA",
+  "data": { "deviceProfile": { "devEUI": "24E124707E051234" }, "type": "PROPERTY", "payload": {} }
+}'
+# also worth firing: eventCreatedTime in milliseconds ("1742872448000") → 400
+# (unix-seconds discipline is enforced, not guessed)
+
+### 6. OFFLINE event — connectivity change feeds device_health
+# expect: 200
+curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+  "eventID": "11111111-0000-4000-8000-000000000006",
+  "eventCreatedTime": "1742872600",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": { "devEUI": "24E124707E051234", "model": "EM400-UDL" },
+    "type": "OFFLINE"
+  }
+}'
+# verify:
+#   select online, last_online_change_at from device_health dh
+#   join devices d on d.id = dh.device_id where d.dev_eui = '24E124707E051234';
+#     -- online = false, timestamps = this request's received_at
+# (send the ONLINE twin afterwards to flip it back)
+
+### 7. SYSTEM_MESSAGES — staff-only critical ops alert
+# expect: 200
+# [VERIFY] the real data block shape via the live Webhook Simulation tab —
+# the function persists it verbatim regardless.
+curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+  "eventID": "11111111-0000-4000-8000-000000000007",
+  "eventCreatedTime": "1742872700",
+  "eventType": "SYSTEM_MESSAGES",
+  "data": { "message": "Webhook push limit reached" }
+}'
+# verify:
+#   select kind, severity, dedup_key, details->>'staff_only'
+#   from alerts where dedup_key like 'mdp_system_messages:%' and resolved_at is null;
+#     -- one row: critical, staff_only 'true' — never customer-facing
+#   -- fire it twice: second insert hits alerts_open_dedup → logged as
+#   -- already-open, still exactly one open row
+
+### 8. (bonus) Rate limit — burst past 300/min on one token
+# expect: 429 after the cap; per-isolate, so distribute-and-observe on prod
+# for i in $(seq 1 320); do curl -s -o /dev/null -w '%{http_code}\n' \
+#   -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' \
+#   -d "{\"eventID\":\"burst-$i\",\"eventCreatedTime\":\"1742872800\",\"eventType\":\"WEBHOOK_TEST\"}"; done | sort | uniq -c
