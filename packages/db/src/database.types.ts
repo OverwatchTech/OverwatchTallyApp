@@ -1,9 +1,5 @@
 // Generated from Supabase (project lropxenygvybctvaspxm) — do not edit by hand.
 // Regenerate after each migration.
-// EXCEPTION (temporary): Views.map_features_geojson was hand-added in the
-// generator's shape for migration 0007, which is not yet applied to the
-// project. Apply 0007, then regenerate — the regen output should match and
-// this note goes away.
 
 export type Json =
   | string
@@ -529,6 +525,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "devices_mounted_on_fkey"
+            columns: ["mounted_on"]
+            isOneToOne: false
+            referencedRelation: "map_features_geojson"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "devices_org_id_fkey"
             columns: ["org_id"]
             isOneToOne: false
@@ -701,6 +704,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "feature_links_from_feature_id_fkey"
+            columns: ["from_feature_id"]
+            isOneToOne: false
+            referencedRelation: "map_features_geojson"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "feature_links_org_id_fkey"
             columns: ["org_id"]
             isOneToOne: false
@@ -715,10 +725,24 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "feature_links_to_feature_id_fkey"
+            columns: ["to_feature_id"]
+            isOneToOne: false
+            referencedRelation: "map_features_geojson"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "feature_links_via_feature_id_fkey"
             columns: ["via_feature_id"]
             isOneToOne: false
             referencedRelation: "map_features"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "feature_links_via_feature_id_fkey"
+            columns: ["via_feature_id"]
+            isOneToOne: false
+            referencedRelation: "map_features_geojson"
             referencedColumns: ["id"]
           },
         ]
@@ -790,6 +814,13 @@ export type Database = {
             columns: ["pen_feature_id"]
             isOneToOne: false
             referencedRelation: "map_features"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "feed_events_pen_feature_id_fkey"
+            columns: ["pen_feature_id"]
+            isOneToOne: false
+            referencedRelation: "map_features_geojson"
             referencedColumns: ["id"]
           },
         ]
@@ -887,6 +918,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "feed_inventory_map_feature_id_fkey"
+            columns: ["map_feature_id"]
+            isOneToOne: false
+            referencedRelation: "map_features_geojson"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "feed_inventory_org_id_fkey"
             columns: ["org_id"]
             isOneToOne: false
@@ -970,6 +1008,13 @@ export type Database = {
             referencedRelation: "map_features"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "feed_schedules_pen_feature_id_fkey"
+            columns: ["pen_feature_id"]
+            isOneToOne: false
+            referencedRelation: "map_features_geojson"
+            referencedColumns: ["id"]
+          },
         ]
       }
       gate_events: {
@@ -1029,6 +1074,13 @@ export type Database = {
             columns: ["gate_feature_id"]
             isOneToOne: false
             referencedRelation: "map_features"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gate_events_gate_feature_id_fkey"
+            columns: ["gate_feature_id"]
+            isOneToOne: false
+            referencedRelation: "map_features_geojson"
             referencedColumns: ["id"]
           },
           {
@@ -1102,6 +1154,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "gateways_install_feature_id_fkey"
+            columns: ["install_feature_id"]
+            isOneToOne: false
+            referencedRelation: "map_features_geojson"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "gateways_org_id_fkey"
             columns: ["org_id"]
             isOneToOne: false
@@ -1165,6 +1224,13 @@ export type Database = {
             columns: ["pen_feature_id"]
             isOneToOne: false
             referencedRelation: "map_features"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "group_placements_pen_feature_id_fkey"
+            columns: ["pen_feature_id"]
+            isOneToOne: false
+            referencedRelation: "map_features_geojson"
             referencedColumns: ["id"]
           },
         ]
@@ -2340,6 +2406,13 @@ export type Database = {
             referencedRelation: "map_features"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "water_events_trough_feature_id_fkey"
+            columns: ["trough_feature_id"]
+            isOneToOne: false
+            referencedRelation: "map_features_geojson"
+            referencedColumns: ["id"]
+          },
         ]
       }
     }
@@ -2362,16 +2435,51 @@ export type Database = {
       map_features_geojson: {
         Row: {
           area_m2: number | null
+          capacity_head: number | null
+          confidence: number | null
           farm_id: string | null
           geojson: Json | null
           id: string | null
           kind: Database["public"]["Enums"]["feature_kind_t"] | null
           name: string | null
-          notes: string | null
           org_id: string | null
           perimeter_m: number | null
           restrictions: string | null
           source: Database["public"]["Enums"]["feature_source_t"] | null
+          species: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          area_m2?: number | null
+          capacity_head?: number | null
+          confidence?: number | null
+          farm_id?: string | null
+          geojson?: never
+          id?: string | null
+          kind?: Database["public"]["Enums"]["feature_kind_t"] | null
+          name?: string | null
+          org_id?: string | null
+          perimeter_m?: number | null
+          restrictions?: string | null
+          source?: Database["public"]["Enums"]["feature_source_t"] | null
+          species?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          area_m2?: number | null
+          capacity_head?: number | null
+          confidence?: number | null
+          farm_id?: string | null
+          geojson?: never
+          id?: string | null
+          kind?: Database["public"]["Enums"]["feature_kind_t"] | null
+          name?: string | null
+          org_id?: string | null
+          perimeter_m?: number | null
+          restrictions?: string | null
+          source?: Database["public"]["Enums"]["feature_source_t"] | null
+          species?: string | null
+          updated_at?: string | null
         }
         Relationships: [
           {
@@ -2392,7 +2500,7 @@ export type Database = {
       }
     }
     Functions: {
-      [_ in never]: never
+      custom_access_token: { Args: { event: Json }; Returns: Json }
     }
     Enums: {
       alert_kind_t:
