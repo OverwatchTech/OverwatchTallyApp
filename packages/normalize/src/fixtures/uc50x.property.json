@@ -1,0 +1,29 @@
+{
+  "eventID": "11111111-0000-4000-8000-000000000009",
+  "eventCreatedTime": "1742872448",
+  "eventVersion": "1.0",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": {
+      "deviceId": "1904371063669395008",
+      "sn": "6707E0461016A008",
+      "devEUI": "24D124707E040008",
+      "name": "Scale house controller",
+      "model": "UC502"
+    },
+    "type": "PROPERTY",
+    "tslID": "",
+    "payload": {
+      "battery": 71,
+      "gpio_input_1": "on",
+      "gpio_counter_2": 1024,
+      "gpio_output_1": "off",
+      "analog_input_1": 12.5,
+      "analog_input_1_type": "current",
+      "analog_input_2": 7.35,
+      "analog_input_2_type": "voltage",
+      "modbus_chn_3": 512.5,
+      "modbus_chn_4": "on"
+    }
+  }
+}

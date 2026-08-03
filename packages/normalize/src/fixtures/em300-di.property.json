@@ -1,0 +1,27 @@
+{
+  "eventID": "11111111-0000-4000-8000-000000000005",
+  "eventCreatedTime": "1742872448",
+  "eventVersion": "1.0",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": {
+      "deviceId": "1904371063669395004",
+      "sn": "6707E0461016A004",
+      "devEUI": "24D124707E040004",
+      "name": "Well house meter",
+      "model": "EM300-DI"
+    },
+    "type": "PROPERTY",
+    "tslID": "",
+    "payload": {
+      "battery": 64,
+      "temperature": 12.3,
+      "humidity": 55.5,
+      "gpio_type": "counter",
+      "pulse": 48212,
+      "water": 1276.4,
+      "water_conv": 2.5,
+      "pulse_conv": 1.5
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "eventID": "11111111-0000-4000-8000-000000000003",
+  "eventCreatedTime": "1742872448",
+  "eventVersion": "1.0",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": {
+      "deviceId": "1904371063669395002",
+      "sn": "6707E0461016A002",
+      "devEUI": "24D124707E040002",
+      "name": "South pasture trough",
+      "model": "EM500-UDL"
+    },
+    "type": "PROPERTY",
+    "tslID": "",
+    "payload": {
+      "battery": 92,
+      "distance": 2410,
+      "distance_mutation": 350,
+      "distance_alarm": "threshold_alarm"
+    }
+  }
+}

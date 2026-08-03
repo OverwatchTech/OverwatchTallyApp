@@ -1,0 +1,24 @@
+{
+  "eventID": "11111111-0000-4000-8000-000000000004",
+  "eventCreatedTime": "1742872448",
+  "eventVersion": "1.0",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": {
+      "deviceId": "1904371063669395003",
+      "sn": "6707E0461016A003",
+      "devEUI": "24D124707E040003",
+      "name": "Feed lane 2 bunk",
+      "model": "EM410-RDL"
+    },
+    "type": "PROPERTY",
+    "tslID": "",
+    "payload": {
+      "battery": 79,
+      "temperature": 18.4,
+      "distance": 640,
+      "position": "tilt",
+      "radar_signal_rssi": 12.5
+    }
+  }
+}

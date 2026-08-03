@@ -1,0 +1,23 @@
+{
+  "eventID": "11111111-0000-4000-8000-000000000006",
+  "eventCreatedTime": "1742872448",
+  "eventVersion": "1.0",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": {
+      "deviceId": "1904371063669395005",
+      "sn": "6707E0461016A005",
+      "devEUI": "24D124707E040005",
+      "name": "Alley gate north",
+      "model": "EM300-MCS"
+    },
+    "type": "PROPERTY",
+    "tslID": "",
+    "payload": {
+      "battery": 98,
+      "temperature": 24.1,
+      "humidity": 40.5,
+      "magnet_status": "open"
+    }
+  }
+}

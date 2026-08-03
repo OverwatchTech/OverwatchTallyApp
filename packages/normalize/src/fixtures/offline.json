@@ -1,0 +1,18 @@
+{
+  "eventID": "22222222-0000-4000-8000-000000000002",
+  "eventCreatedTime": "1742872660",
+  "eventVersion": "1.0",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": {
+      "deviceId": "1904371063669395001",
+      "sn": "6707E0461016A001",
+      "devEUI": "24D124707E040001",
+      "name": "Pen 4 trough",
+      "model": "EM400-UDL"
+    },
+    "type": "OFFLINE",
+    "tslID": "",
+    "payload": {}
+  }
+}

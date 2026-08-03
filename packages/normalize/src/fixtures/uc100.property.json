@@ -1,0 +1,22 @@
+{
+  "eventID": "11111111-0000-4000-8000-00000000000a",
+  "eventCreatedTime": "1742872448",
+  "eventVersion": "1.0",
+  "eventType": "DEVICE_DATA",
+  "data": {
+    "deviceProfile": {
+      "deviceId": "1904371063669395009",
+      "sn": "6707E0461016A009",
+      "devEUI": "24D124707E040009",
+      "name": "Bunk scale indicator",
+      "model": "UC100"
+    },
+    "type": "PROPERTY",
+    "tslID": "",
+    "payload": {
+      "modbus_chn_1": 8420,
+      "modbus_chn_2": 3.75,
+      "custom_message": "0102"
+    }
+  }
+}
