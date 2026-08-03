@@ -25,6 +25,11 @@ describe('formatMeasure (SI stored → US customary displayed)', () => {
     expect(formatMeasure(453.59237, 'kg')).toBe('1,000 lb');
   });
 
+  it('converts kg to US short tons via kg_ton', () => {
+    expect(formatMeasure(907.18474, 'kg_ton')).toBe('1.0 ton');
+    expect(formatMeasure(45359.237, 'kg_ton')).toBe('50.0 ton');
+  });
+
   it('converts l to gal', () => {
     expect(formatMeasure(3.785411784, 'l')).toBe('1.0 gal');
   });

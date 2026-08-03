@@ -2,8 +2,12 @@
 // Storage is SI everywhere; conversion happens once, at the render layer,
 // here. Callers render the returned string in JetBrains Mono (`.machine`).
 
-/** SI units as stored. Targets are fixed: ac, ft, in, lb, gal, °F. */
-export type SiUnit = 'm2' | 'm' | 'mm' | 'kg' | 'l' | 'c';
+/**
+ * SI units as stored. Targets are fixed: ac, ft, in, lb, gal, °F, ton.
+ * `kg_ton` is stored kg like `kg`, displayed as US short tons (2,000 lb) —
+ * for hay-scale masses where lb would be unreadable.
+ */
+export type SiUnit = 'm2' | 'm' | 'mm' | 'kg' | 'kg_ton' | 'l' | 'c';
 
 interface Conversion {
   /** US customary unit suffix. */
@@ -19,6 +23,7 @@ const CONVERSIONS: Record<SiUnit, Conversion> = {
   m: { unit: 'ft', convert: (v) => v * (1250 / 381), digits: 0 },
   mm: { unit: 'in', convert: (v) => v / 25.4, digits: 1 },
   kg: { unit: 'lb', convert: (v) => v * 2.204622621848776, digits: 0 },
+  kg_ton: { unit: 'ton', convert: (v) => v / 907.18474, digits: 1 },
   l: { unit: 'gal', convert: (v) => v / 3.785411784, digits: 1 },
   c: { unit: '°F', convert: (v) => v * (9 / 5) + 32, digits: 0 },
 };
