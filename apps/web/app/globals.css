@@ -3,8 +3,8 @@
 /*
   Part Five tokens, dark instrument panel. The color rule is semantic
   (CLAUDE.md #4): teal = live data / positive state / primary action;
-  alert = something is actually wrong; hay and water are reserved for
-  projections and liquid measurement and do not appear in this phase.
+  alert = something is actually wrong, never decorative; hay = projections
+  ONLY (the days-of-feed estimate); water = liquid measurement ONLY.
 */
 :root {
   --background: #0b0e12;
@@ -17,6 +17,8 @@
   --accent-deep: #0e8f6f;
   --navy: #16233f;
   --alert: #ff5c38;
+  --hay: #e8b64c;
+  --water: #4fb3d9;
 }
 
 @theme inline {
@@ -30,6 +32,8 @@
   --color-accent-deep: var(--accent-deep);
   --color-navy: var(--navy);
   --color-alert: var(--alert);
+  --color-hay: var(--hay);
+  --color-water: var(--water);
   --font-sans: var(--font-inter-tight), system-ui, sans-serif;
   --font-display: var(--font-archivo), var(--font-inter-tight), system-ui, sans-serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
@@ -52,6 +56,30 @@ body {
 .machine {
   font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+  Telemetry Rail value swap: a live value that just changed fades in.
+  tabular-nums + fixed rail width mean the swap never reflows layout;
+  reduced motion turns the fade off entirely.
+*/
+@keyframes rail-swap {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.rail-swap {
+  animation: rail-swap 300ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-swap {
+    animation: none;
+  }
 }
 
 /*
