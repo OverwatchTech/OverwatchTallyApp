@@ -1,6 +1,3 @@
-// Generated from Supabase (project lropxenygvybctvaspxm) — do not edit by hand.
-// Regenerate after each migration.
-
 export type Json =
   | string
   | number
@@ -1796,6 +1793,45 @@ export type Database = {
         }
         Relationships: []
       }
+      readings_202607: {
+        Row: {
+          device_id: string
+          event_created_time: string | null
+          farm_id: string
+          id: number
+          mdp_event_id: string | null
+          metric: string
+          org_id: string
+          received_at: string
+          value: number | null
+          value_text: string | null
+        }
+        Insert: {
+          device_id: string
+          event_created_time?: string | null
+          farm_id: string
+          id?: number
+          mdp_event_id?: string | null
+          metric: string
+          org_id: string
+          received_at: string
+          value?: number | null
+          value_text?: string | null
+        }
+        Update: {
+          device_id?: string
+          event_created_time?: string | null
+          farm_id?: string
+          id?: number
+          mdp_event_id?: string | null
+          metric?: string
+          org_id?: string
+          received_at?: string
+          value?: number | null
+          value_text?: string | null
+        }
+        Relationships: []
+      }
       readings_202608: {
         Row: {
           device_id: string
@@ -2514,6 +2550,7 @@ export type Database = {
         | "sensor_offline"
         | "battery_low"
         | "gateway_offline"
+        | "mdp_system_messages"
       backhaul_t: "ethernet" | "cellular" | "wifi"
       bale_reason_t:
         | "delivered"
@@ -2718,6 +2755,7 @@ export const Constants = {
         "sensor_offline",
         "battery_low",
         "gateway_offline",
+        "mdp_system_messages",
       ],
       backhaul_t: ["ethernet", "cellular", "wifi"],
       bale_reason_t: [
