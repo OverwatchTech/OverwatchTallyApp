@@ -69,6 +69,47 @@ function place(d: Details, fallback: string): string {
   return text(d, 'place') ?? fallback;
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * A timestamp out of `details`, in the farm's own clock.
+ *
+ * The condition functions stamp raw ISO strings — `2026-08-03T03:40:43.841+00:00`
+ * is what lands in the column. Printing that at somebody standing in a feed
+ * alley is the JSON dump this file exists to avoid, and it is wrong twice
+ * over: it is unreadable, and it is UTC, so an alert that fired at 21:40 in
+ * Colorado reads as though it fired the next morning.
+ *
+ * A date-only value (`2026-08-02`, the day an intake drop happened) is
+ * rendered from its own digits rather than parsed — `new Date('2026-08-02')`
+ * is UTC midnight, and shifting that into a US zone moves the day backwards.
+ */
+function when(d: Details, key: string, timezone: string): string | null {
+  const raw = text(d, key);
+  if (raw === null) return null;
+
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (dateOnly) {
+    const month = MONTHS[Number(dateOnly[2]) - 1];
+    return month === undefined ? raw : `${month} ${Number(dateOnly[3])}`;
+  }
+
+  const at = new Date(raw);
+  if (Number.isNaN(at.getTime())) return raw;
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(at);
+  } catch {
+    return raw;
+  }
+}
+
 function fact(label: string, value: string | null): AlertFact[] {
   return value === null ? [] : [{ label, value }];
 }
@@ -82,9 +123,19 @@ function pct(value: number | null, digits = 0): string | null {
  * An unknown kind gets an honest placeholder rather than a crash: the enum
  * grows by migration, and a screen that blanks on a new value is worse than
  * one that says "we do not have copy for this yet".
+ *
+ * `timezone` is the farm's IANA zone. Every timestamp in `details` renders in
+ * it, for the same reason every timestamp on the alerts screen does: an alert
+ * opened at 21:40 in Colorado opened at 21:40, and UTC would put it on the
+ * following day.
  */
-export function describeAlert(kind: string, details: Details | null): AlertCopy {
+export function describeAlert(
+  kind: string,
+  details: Details | null,
+  timezone = 'UTC',
+): AlertCopy {
   const d = details ?? {};
+  const tz = timezone;
 
   switch (kind) {
     case 'trough_low': {
@@ -97,7 +148,7 @@ export function describeAlert(kind: string, details: Details | null): AlertCopy 
         facts: [
           ...fact('Down to water', level === null ? null : formatMeasure(level, 'mm')),
           ...fact('Alerts below', threshold === null ? null : formatMeasure(threshold, 'mm')),
-          ...fact('Reading taken', text(d, 'reading_at')),
+          ...fact('Reading taken', when(d, 'reading_at', tz)),
         ],
       };
     }
@@ -141,19 +192,20 @@ export function describeAlert(kind: string, details: Details | null): AlertCopy 
             return kg === null ? null : `${formatMeasure(kg, 'kg')}/day`;
           })()),
           ...fact('Down by', pct(number(d, 'drop_pct'))),
-          ...fact('Day', text(d, 'day')),
+          ...fact('Day', when(d, 'day', tz)),
         ],
       };
     }
 
     case 'schedule_missed': {
       const where = place(d, 'a pen');
-      const when = text(d, 'window_local');
+      const window = text(d, 'window_local');
       return {
-        title: when === null ? `${where} missed a feeding` : `${where} missed the ${when} feeding`,
+        title:
+          window === null ? `${where} missed a feeding` : `${where} missed the ${window} feeding`,
         detail: 'Nothing has been logged for this pen since the window opened. Log it if it was fed.',
         facts: [
-          ...fact('Window', when),
+          ...fact('Window', window),
           ...fact('Grace', (() => {
             const m = number(d, 'grace_minutes');
             return m === null ? null : `${m} min`;
@@ -176,7 +228,7 @@ export function describeAlert(kind: string, details: Details | null): AlertCopy 
           from && to
             ? `This gate is standing open during the ${from}–${to} hours it is supposed to be shut.`
             : 'This gate is standing open during hours it is supposed to be shut.',
-        facts: [...fact('Open since', text(d, 'open_since'))],
+        facts: [...fact('Open since', when(d, 'open_since', tz))],
       };
     }
 
@@ -190,7 +242,7 @@ export function describeAlert(kind: string, details: Details | null): AlertCopy 
         facts: [
           ...fact('Open for', minutes === null ? null : `${Math.round(minutes)} min`),
           ...fact('Limit', limit === null ? null : `${limit} min`),
-          ...fact('Open since', text(d, 'open_since')),
+          ...fact('Open since', when(d, 'open_since', tz)),
         ],
       };
     }
@@ -239,8 +291,8 @@ export function describeAlert(kind: string, details: Details | null): AlertCopy 
         title: `The sensor at ${where} went quiet`,
         detail: 'It stopped reporting. Nothing from that spot is being recorded until it comes back.',
         facts: [
-          ...fact('Quiet since', text(d, 'offline_since')),
-          ...fact('Last reading', text(d, 'last_seen_at')),
+          ...fact('Quiet since', when(d, 'offline_since', tz)),
+          ...fact('Last reading', when(d, 'last_seen_at', tz)),
         ],
       };
     }
@@ -264,7 +316,7 @@ export function describeAlert(kind: string, details: Details | null): AlertCopy 
       return {
         title: 'The ranch stopped sending data',
         detail: 'Readings are not coming through right now. We can see it too, and we are on it.',
-        facts: [...fact('Last reading', text(d, 'last_seen_at'))],
+        facts: [...fact('Last reading', when(d, 'last_seen_at', tz))],
       };
 
     default:
