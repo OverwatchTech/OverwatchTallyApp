@@ -30,12 +30,49 @@ import {
   type MemberRole,
   type TenantTable,
 } from './tables';
-import { decodeJwtClaims, setupWorld, teardownWorld, type ActorKey, type World } from './fixtures';
+import {
+  auditPartitions,
+  extraOnPartition,
+  missingFromPartition,
+  probePartitionAsMember,
+  type PartitionAudit,
+} from './partitions';
+import {
+  decodeJwtClaims,
+  serviceClient,
+  setupWorld,
+  teardownWorld,
+  type ActorKey,
+  type World,
+} from './fixtures';
 
 announceEnv();
 
 const RLS_DENIED = '42501';
 const NET = 30_000;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Partition discovery — done once, at module load, before any test is
+// collected, so `describe.each` can fan out over whatever the catalog actually
+// holds today. No list, no pull request, no month that nobody remembered.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let discovered: PartitionAudit[] = [];
+let discoveryError: string | null = null;
+
+if (RLS_ENV.ready) {
+  try {
+    discovered = await auditPartitions(serviceClient());
+  } catch (err) {
+    discoveryError = err instanceof Error ? err.message : String(err);
+  }
+}
+
+/** `readings_202608` for the month we are running in. */
+const currentMonthSuffix = (): string => {
+  const d = new Date();
+  return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Static checks — these need no database, so `pnpm test` always exercises them.
@@ -87,6 +124,123 @@ describe('table inventory (no database required)', () => {
       for (const role of [...t.memberInsert, ...t.memberUpdate, ...t.memberDelete]) {
         expect(t.memberRead, `${t.table}: ${role} may write but not read`).toContain(role);
       }
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Partition row security — the catalog invariant.
+//
+// This block is why the suite exists in its current form. On 2026-08-03 the
+// 138 cases above were green while `readings_2026_08` was readable by any
+// authenticated user in any org: Postgres applies a partitioned table's RLS
+// only to queries routed THROUGH the parent, and `tables.ts` names parents.
+// 1,050 rows of another tenant's telemetry were reachable. Migration 0009
+// fixed the data; these cases are the fix to the TEST.
+//
+// The invariant, asserted directly rather than inferred from a probe:
+//   every partition of an RLS-enabled parent has relrowsecurity = true,
+//   and carries a policy set equivalent to its parent's.
+//
+// It needs no fixture world — only the catalog — so it runs even if the
+// tenant fixtures fail to build.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(!RLS_ENV.ready)('partition row security (catalog invariant)', () => {
+  it('discovers partitions from pg_class / pg_inherits', () => {
+    expect(discoveryError, `partition discovery failed:\n${discoveryError}`).toBeNull();
+    expect(
+      discovered.length,
+      'the catalog reports zero partitions. Either pg_cron stopped creating ' +
+        'them (readings/raw_events/tracker_positions are partitioned by month ' +
+        'in 0003) or the audit function is filtering everything out. Both are ' +
+        'failures: an unpartitioned readings table would silently pass every ' +
+        'case below.',
+    ).toBeGreaterThan(0);
+  });
+
+  it('covers the month we are running in', () => {
+    // pg_cron runs app.ensure_month_partitions 3 months ahead (0009). If the
+    // current month is missing, ingest is writing into a partition that was
+    // created ad hoc — or failing outright — and nothing else here would say so.
+    const suffix = currentMonthSuffix();
+    const parents = [...new Set(discovered.map((p) => p.parent_name))];
+    expect(parents.length, 'no partitioned parents discovered').toBeGreaterThan(0);
+    for (const parent of parents) {
+      const want = `${parent}_${suffix}`;
+      expect(
+        discovered.map((p) => p.partition_name),
+        `${want} does not exist — app.ensure_month_partitions has not run for this month`,
+      ).toContain(want);
+    }
+  });
+
+  describe.each(discovered)('$partition_name', (row: PartitionAudit) => {
+    it('has row security enabled when its parent does', () => {
+      if (!row.parent_rls) return; // nothing to mirror
+      expect(
+        row.partition_rls,
+        `LEAK — ${row.partition_name} has relrowsecurity = false while its parent ` +
+          `${row.parent_name} has it on. Every authenticated user can read this ` +
+          `partition directly, in every org. Fix: select app.secure_time_partition(` +
+          `'${row.partition_name}', '${row.parent_name}');`,
+      ).toBe(true);
+    });
+
+    it("carries its parent's policies", () => {
+      if (!row.parent_rls) return;
+      const missing = missingFromPartition(row);
+      expect(
+        missing,
+        `${row.partition_name} is missing ${missing.length} of ${row.parent_name}'s ` +
+          `policies. RLS with no policy that admits a row denies everything, but a ` +
+          `PARTIAL mirror is worse than either: it admits some rows to some roles ` +
+          `on rules nobody wrote down. Missing:\n  ${missing.join('\n  ')}`,
+      ).toEqual([]);
+    });
+
+    it('carries no policy its parent does not', () => {
+      if (!row.parent_rls) return;
+      const extra = extraOnPartition(row);
+      expect(
+        extra,
+        `${row.partition_name} has ${extra.length} policies its parent does not. ` +
+          `A partition is not a place to widen access — whoever needs this should ` +
+          `write it on ${row.parent_name} where it is reviewable. Extra:\n  ${extra.join('\n  ')}`,
+      ).toEqual([]);
+    });
+
+    it('matches its parent on FORCE ROW LEVEL SECURITY', () => {
+      expect(
+        row.partition_forced,
+        `${row.partition_name} and ${row.parent_name} disagree on force row level ` +
+          `security; the table owner is exempt on one and not the other.`,
+      ).toBe(row.parent_forced);
+    });
+  });
+
+  it('publishes every partition of a realtime-published family, or none', () => {
+    // Supabase Realtime authorizes postgres_changes against the relation the
+    // WAL row came from, and the publication is per-partition (pubviaroot off).
+    // A month whose partition never made it into supabase_realtime is a month
+    // where the dashboard silently stops updating — or, if RLS were also
+    // missing, a farm-wide broadcast. 0009 keeps them in step; this asserts it.
+    const byParent = new Map<string, PartitionAudit[]>();
+    for (const row of discovered) {
+      const list = byParent.get(row.parent_name) ?? [];
+      list.push(row);
+      byParent.set(row.parent_name, list);
+    }
+    for (const [parent, rows] of byParent) {
+      const published = rows.filter((r) => r.in_realtime_publication).map((r) => r.partition_name);
+      const absent = rows.filter((r) => !r.in_realtime_publication).map((r) => r.partition_name);
+      if (published.length === 0) continue; // family is not on the rail at all
+      expect(
+        absent,
+        `${parent} is published to supabase_realtime for ${published.length} of its ` +
+          `${rows.length} partitions. Realtime subscribers will miss every row that ` +
+          `lands in: ${absent.join(', ')}. Fix: select app.publish_readings_partition(...).`,
+      ).toEqual([]);
     }
   });
 });
@@ -248,6 +402,62 @@ describe.skipIf(!RLS_ENV.ready)(
             `${t.table}: rejected with ${error?.code} "${error?.message}" — expected RLS ${RLS_DENIED}`,
           ).toBe(RLS_DENIED);
           expect(await countRows(t.table, col, world.orgB.orgId)).toBe(before);
+        },
+        NET,
+      );
+    });
+
+    // ── partitions, addressed directly ──────────────────────────────────────
+    // The catalog block above proves the policies are there. This proves the
+    // consequence: GET /rest/v1/readings_202608 — the literal request that
+    // returned 1,050 foreign rows on 2026-08-03 — comes back with nothing.
+    describe('partitions addressed by name (the original attack)', () => {
+      it(
+        'org B really does have rows in this month, so the probes are not vacuous',
+        async () => {
+          // Written through the PARENT by the fixture; they land in the
+          // current-month partition. If this is zero, every probe below would
+          // pass by having nothing to find.
+          for (const parent of ['readings', 'raw_events', 'tracker_positions']) {
+            expect(
+              await countRows(parent, 'org_id', world.orgB.orgId),
+              `${parent}: fixture seeded no org B row`,
+            ).toBeGreaterThan(0);
+          }
+        },
+        NET,
+      );
+
+      it.each(discovered.map((p) => [p.partition_name] as const))(
+        '%s: org A owner reads zero org B rows',
+        async (partition) => {
+          const verdict = await probePartitionAsMember(
+            RLS_ENV.url,
+            RLS_ENV.anonKey,
+            world.actors.ownerA.accessToken,
+            partition,
+            'org_id',
+            world.orgB.orgId,
+          );
+          if (verdict.kind === 'error') {
+            throw new Error(
+              `${partition}: unexpected HTTP ${verdict.status} — ${verdict.body}`,
+            );
+          }
+          if (verdict.kind === 'not_exposed') {
+            // Acceptable, and worth saying out loud: this project's PostgREST
+            // does not carry partitions in its schema cache today, so the API
+            // layer refuses the request before RLS is consulted. That is a
+            // configuration of someone else's software, not a boundary we own
+            // — Realtime and any direct SQL path still reach the partition,
+            // which is why the catalog invariant above is the real guard.
+            return;
+          }
+          expect(
+            verdict.count,
+            `LEAK — org A read ${verdict.count} org B rows straight out of ` +
+              `${partition}, bypassing the parent's RLS entirely.`,
+          ).toBe(0);
         },
         NET,
       );
