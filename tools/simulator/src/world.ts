@@ -267,9 +267,12 @@ interface DeviceState {
   nextReportMs: number;
   /** This device's fixed offset within its reporting interval. */
   phaseMs: number;
-  /** Accumulators for the hourly water_events row. */
+  /**
+   * Accumulators for the hourly water_events row. Volume is NOT among them —
+   * it is the difference of the meter's integral, so the hourly rows and the
+   * counter cannot drift apart.
+   */
   hourStartMs: number;
-  hourVolumeL: number;
   hourRefills: number;
   hourTempSum: number;
   hourTempN: number;
@@ -340,7 +343,6 @@ export class World {
         // slightly-offset copy of the same history.
         nextReportMs: nextOnGrid(startMs, d.intervalMin * 60_000, phaseMs),
         hourStartMs: startMs - (startMs % 3_600_000),
-        hourVolumeL: 0,
         hourRefills: 0,
         hourTempSum: 0,
         hourTempN: 0,
@@ -507,9 +509,7 @@ export class World {
         }
         if (!tank && pen !== undefined) this.penRefilling.set(pen.penFeatureId, st.refilling);
         if (st.refilling) {
-          const addedL = refillLpm * minutes;
-          st.depthMm += addedL / perMm;
-          st.hourVolumeL += addedL;
+          st.depthMm += (refillLpm * minutes) / perMm;
           if (st.depthMm >= full) {
             st.depthMm = full;
             st.refilling = false;
@@ -806,7 +806,6 @@ export class World {
       }
     }
     st.hourStartMs = hour;
-    st.hourVolumeL = 0;
     st.hourRefills = 0;
     st.hourTempSum = 0;
     st.hourTempN = 0;
