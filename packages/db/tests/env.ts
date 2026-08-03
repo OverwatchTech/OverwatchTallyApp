@@ -6,7 +6,8 @@
  * out of its own tenant. Without credentials it cannot run, so it SKIPS — it
  * never fakes a pass.
  *
- * Required (CI secret store or your shell — never a file in this repo):
+ * Required — from packages/db/.env.local (gitignored), your shell, or the CI
+ * secret store:
  *   SUPABASE_URL                https://<ref>.supabase.co
  *   SUPABASE_ANON_KEY           publishable key, used to sign the test users in
  *   SUPABASE_SERVICE_ROLE_KEY   fixture setup/teardown only; bypasses RLS
@@ -15,9 +16,19 @@
  */
 
 // packages/db carries no @types/node (see tsconfig `include`), and the suite
-// needs exactly one global. Declaring it here keeps the dependency list at the
-// single approved addition, @supabase/supabase-js.
-declare const process: { env: Record<string, string | undefined> };
+// needs exactly two globals. Declaring them here keeps the dependency list at
+// the single approved addition, @supabase/supabase-js.
+declare const process: {
+  env: Record<string, string | undefined>;
+  loadEnvFile: (path: string) => void;
+};
+
+// Node 21.7+ built-in dotenv: pick up packages/db/.env.local when present.
+try {
+  process.loadEnvFile(new URL('../.env.local', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+} catch {
+  // no file — env comes from the shell or CI, or the suite skips
+}
 
 const read = (name: string): string => process.env[name]?.trim() ?? '';
 
