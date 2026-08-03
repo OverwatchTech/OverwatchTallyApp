@@ -95,7 +95,10 @@ export function parseTstzRange(raw: unknown): { lower: string | null; upper: str
   if (typeof raw !== 'string') return { lower: null, upper: null };
   const match = raw.match(/^[[(]\s*("?)([^",]*)\1\s*,\s*("?)([^")\]]*)\3\s*[)\]]$/);
   if (!match) return { lower: null, upper: null };
-  return { lower: normalizePgTimestamp(match[2]), upper: normalizePgTimestamp(match[4]) };
+  return {
+    lower: normalizePgTimestamp(match[2] ?? ''),
+    upper: normalizePgTimestamp(match[4] ?? ''),
+  };
 }
 
 function normalizePgTimestamp(value: string): string | null {
