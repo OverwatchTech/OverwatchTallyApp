@@ -1,0 +1,10 @@
+# local embedding cache + exported models
+.embed-cache/
+onnx/
+*.onnx
+*.pt
+
+# python build/test residue (venv + __pycache__ covered by repo root)
+*.egg-info/
+.pytest_cache/
+build/
