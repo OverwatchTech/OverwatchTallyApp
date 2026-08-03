@@ -49,7 +49,7 @@ export function TelemetryRail({ children }: { children: React.ReactNode }) {
   return (
     <>
       <div className="flex min-w-0 flex-1">
-        <div className="min-w-0 flex-1 pb-14 md:pb-0">{children}</div>
+        <div className="min-w-0 flex-1 pb-14 min-[900px]:pb-0">{children}</div>
         <RailStrip farmId={farmId} />
       </div>
     </>
@@ -207,7 +207,7 @@ function RailStrip({ farmId }: { farmId: string }) {
       {/* Desktop: right-edge strip. Fixed width; values never reflow it. */}
       <aside
         aria-label="Live farm numbers"
-        className="hidden w-32 shrink-0 border-l border-hairline bg-background md:block"
+        className="hidden w-32 shrink-0 border-l border-hairline bg-background min-[900px]:block"
       >
         <div className="sticky top-0 flex h-screen flex-col" aria-live="polite">
           <p className="flex items-center gap-1.5 border-b border-hairline px-3 py-3 text-[10px] tracking-wide text-muted uppercase">
@@ -239,7 +239,7 @@ function RailStrip({ farmId }: { farmId: string }) {
       <nav
         aria-label="Live farm numbers"
         aria-live="polite"
-        className="fixed inset-x-0 bottom-0 z-40 grid h-14 grid-cols-4 border-t border-hairline bg-background md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 grid h-14 grid-cols-4 border-t border-hairline bg-background min-[900px]:hidden"
       >
         {items.map((item) => (
           <div

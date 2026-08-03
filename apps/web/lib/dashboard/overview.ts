@@ -1,6 +1,7 @@
 // Farm overview assembly — the screen left open on a shop monitor.
 // Server-side only in practice (called from the page), but takes any typed
 // client; RLS scopes everything.
+import type { Database } from '@overwatch/db';
 import { formatMeasure } from '@overwatch/ui';
 import { fetchOpenAlertCount, fetchWaterTodayL, type DbClient } from './vitals';
 import { alertHeadline, feedSourceLabel } from './voice';
@@ -31,7 +32,8 @@ export interface OverviewData {
     id: string;
     name: string;
     status: string;
-    tier: string | null;
+    /** Null until billing assigns one; formatTier() renders it. */
+    tier: Database['public']['Enums']['tier_t'] | null;
     timezone: string;
   };
   headOnFeed: number | null;

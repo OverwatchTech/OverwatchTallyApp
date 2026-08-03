@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { claimsFromSession, isManagerOrOwner } from "@/lib/auth/claims";
+import { TelemetryRail } from "@/components/telemetry-rail";
 import { signOut } from "./actions";
 
 export default async function AppLayout({
@@ -85,19 +86,28 @@ export default async function AppLayout({
         </div>
       </aside>
 
-      <main className="flex-1 p-8">
-        {claims.orgId ? (
-          children
-        ) : (
-          <div className="mx-auto max-w-md rounded-lg border border-hairline bg-card p-6">
-            <h1 className="mb-1 text-base font-medium">Almost there</h1>
-            <p className="text-sm text-muted">
-              Your account is not connected to an operation yet. Your installer
-              finishes this step during setup.
-            </p>
-          </div>
-        )}
-      </main>
+      {/*
+        The rail is a farm-scoped strip: it renders itself only on
+        /farms/[farmId]/** and passes the page straight through everywhere
+        else, so non-farm routes keep the full width. Its width is reserved
+        from first paint (fixed w-32 aside on desktop, a 14-unit bottom bar
+        under 900px), so numbers arriving over Realtime never shift the page.
+      */}
+      <TelemetryRail>
+        <main className="min-w-0 flex-1 p-8">
+          {claims.orgId ? (
+            children
+          ) : (
+            <div className="mx-auto max-w-md rounded-lg border border-hairline bg-card p-6">
+              <h1 className="mb-1 text-base font-medium">Almost there</h1>
+              <p className="text-sm text-muted">
+                Your account is not connected to an operation yet. Your
+                installer finishes this step during setup.
+              </p>
+            </div>
+          )}
+        </main>
+      </TelemetryRail>
     </div>
   );
 }
