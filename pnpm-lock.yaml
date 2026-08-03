@@ -50,6 +50,12 @@ importers:
       react-dom:
         specifier: 19.1.0
         version: 19.1.0(react@19.1.0)
+      terra-draw:
+        specifier: ^1.32.2
+        version: 1.32.2
+      terra-draw-maplibre-gl-adapter:
+        specifier: ^1.4.1
+        version: 1.4.1(maplibre-gl@6.1.0)(terra-draw@1.32.2)
     devDependencies:
       '@eslint/eslintrc':
         specifier: ^3
@@ -2429,6 +2435,15 @@ packages:
   tapable@2.3.3:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
     engines: {node: '>=6'}
+
+  terra-draw-maplibre-gl-adapter@1.4.1:
+    resolution: {integrity: sha512-qZ/bc9bVPnyt0keLVTofV8xiTPkdkbO6RzqrfNLe9zH/edW5PsjvJw97m1EksPZeXNJtFxsVbhi12cPaoNiWfg==}
+    peerDependencies:
+      maplibre-gl: '>=4'
+      terra-draw: ^1.0.0
+
+  terra-draw@1.32.2:
+    resolution: {integrity: sha512-ysy1EBhvYbMqddv4+LyNmb56DpZLGPP9QO/I5kZoD4PArRJekOBlvXPKjo9w+jikcOEMgHUSw2G7AHLqI2QoiA==}
 
   tinybench@2.9.0:
     resolution: {integrity: sha512-0+DUvqWMValLmha6lr4kD8iAMK1HzV0/aKnCtWb9v9641TnP/MFb7Pc2bxoxQjTXAErryXVgUOfv2YqNllqGeg==}
@@ -4936,6 +4951,13 @@ snapshots:
   tailwindcss@4.3.3: {}
 
   tapable@2.3.3: {}
+
+  terra-draw-maplibre-gl-adapter@1.4.1(maplibre-gl@6.1.0)(terra-draw@1.32.2):
+    dependencies:
+      maplibre-gl: 6.1.0
+      terra-draw: 1.32.2
+
+  terra-draw@1.32.2: {}
 
   tinybench@2.9.0: {}
 
