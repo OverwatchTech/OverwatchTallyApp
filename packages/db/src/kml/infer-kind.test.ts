@@ -1,9 +1,10 @@
-// Kind inference for the KML seed pipeline (seeds/infer-kind.mjs).
+// Kind inference for the KML pipeline (src/kml/infer-kind.mjs — shared by
+// the seed generator and the import library).
 // Cases mirror the real Farm Project placemark names, including every name
 // where rule order or a missing keyword could misclassify.
 
 import { describe, expect, it } from 'vitest';
-import { extractRestriction, inferKind } from '../seeds/infer-kind.mjs';
+import { extractRestriction, inferKind } from './infer-kind.mjs';
 
 describe('inferKind', () => {
   it.each([

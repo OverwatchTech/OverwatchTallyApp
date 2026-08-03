@@ -1,5 +1,9 @@
 // Generated from Supabase (project lropxenygvybctvaspxm) — do not edit by hand.
 // Regenerate after each migration.
+// EXCEPTION (temporary): Views.map_features_geojson was hand-added in the
+// generator's shape for migration 0007, which is not yet applied to the
+// project. Apply 0007, then regenerate — the regen output should match and
+// this note goes away.
 
 export type Json =
   | string
@@ -2351,6 +2355,37 @@ export type Database = {
             columns: ["group_id"]
             isOneToOne: false
             referencedRelation: "groups"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      map_features_geojson: {
+        Row: {
+          area_m2: number | null
+          farm_id: string | null
+          geojson: Json | null
+          id: string | null
+          kind: Database["public"]["Enums"]["feature_kind_t"] | null
+          name: string | null
+          notes: string | null
+          org_id: string | null
+          perimeter_m: number | null
+          restrictions: string | null
+          source: Database["public"]["Enums"]["feature_source_t"] | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "map_features_farm_id_fkey"
+            columns: ["farm_id"]
+            isOneToOne: false
+            referencedRelation: "farms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "map_features_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
             referencedColumns: ["id"]
           },
         ]
