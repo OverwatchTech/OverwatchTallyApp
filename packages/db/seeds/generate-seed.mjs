@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { extractRestriction, inferKind } from './infer-kind.mjs';
+import { extractRestriction, inferKind } from '../src/kml/infer-kind.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const KML_PATH = join(HERE, 'farm-project.kml');
