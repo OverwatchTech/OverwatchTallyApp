@@ -8,10 +8,17 @@
  *  the service role) may touch belongs in STAFF_ONLY_TABLES.
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * This list is hand-maintained on purpose: PostgREST exposes no way to read
- * pg_policies or pg_tables from a client, and the schema deliberately ships no
- * RPC that would. So there is nothing to introspect against — the list *is*
- * the guard, and it is only as good as the last person who edited the schema.
+ * This list is hand-maintained, and on 2026-08-03 that cost us: it names only
+ * PARENT tables, so the monthly partitions of `readings`, `raw_events` and
+ * `tracker_positions` were never attacked. They had row security disabled and
+ * 1,050 rows of one tenant's telemetry were readable by another. Every case in
+ * this file was green throughout.
+ *
+ * Partitions are therefore NOT listed here and never will be — `partitions.ts`
+ * asks pg_class / pg_inherits which ones exist on every run, so next month's
+ * partition is covered without anyone remembering it. What remains hand-listed
+ * is the set of base tables, which changes only when someone writes a
+ * migration; if you are writing one, this file is part of it.
  *
  * The role arrays below mirror the policies exactly as written in
  * packages/db/migrations/*.sql (the `migration` field names the file). They are
