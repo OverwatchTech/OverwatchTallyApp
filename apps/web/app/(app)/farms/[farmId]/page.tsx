@@ -1,59 +1,223 @@
+// /farms/[farmId] — the shop-monitor screen. Left open on a wall display in
+// the office, so it answers the four standing questions without a click:
+// how many head are on feed, how long the feed lasts, how much water went
+// through today, and whether anything is actually wrong.
+//
+// Semantics (CLAUDE.md #4): head and water-today are measured, so they render
+// foreground/water. Days of feed on hand is a PROJECTION — inventory divided
+// by the trailing feed rate — so it renders hay and says "estimate" out loud.
+// Alert orange appears only when an alert is actually open; a farm with
+// nothing wrong shows a muted zero, never a decorative orange one.
+
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { formatMeasure } from '@overwatch/ui';
 import { createClient } from '@/lib/supabase/server';
 import { claimsFromSession, isManagerOrOwner } from '@/lib/auth/claims';
 import { formatTier } from '@/lib/format';
+import { getFarmOverview } from '@/lib/dashboard/overview';
+import { formatDayClock } from '@/lib/dashboard/timezone';
 import { FarmForm } from './farm-form';
+
+const OPS_TABS = [
+  { slug: 'feed', label: 'Feed' },
+  { slug: 'water', label: 'Water' },
+  { slug: 'movement', label: 'Movement' },
+] as const;
 
 export default async function FarmPage({ params }: { params: Promise<{ farmId: string }> }) {
   const { farmId } = await params;
   const supabase = await createClient();
 
-  const { data: farm, error } = await supabase
-    .from('farms')
-    .select('id, name, status, subscription_tier, timezone')
-    .eq('id', farmId)
-    .single();
-
-  if (error || !farm) notFound();
+  const overview = await getFarmOverview(supabase, farmId);
+  if (!overview) notFound();
+  const { farm, pens, events } = overview;
+  const tz = farm.timezone;
 
   const {
     data: { session },
   } = await supabase.auth.getSession();
-  const claims = claimsFromSession(session);
-  const canEdit = isManagerOrOwner(claims.memberRole);
+  const canEdit = isManagerOrOwner(claimsFromSession(session).memberRole);
+
+  const alertsOpen = overview.openAlerts > 0;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="type-display text-xl">{farm.name}</h1>
-          <p className="machine mt-2 text-xs text-muted">
-            {farm.status}
-            {farm.subscription_tier ? ` · ${formatTier(farm.subscription_tier)}` : ''}
-            {` · ${farm.timezone}`}
-          </p>
+    <div className="mx-auto max-w-5xl space-y-6">
+      <header className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="type-display text-xl">{farm.name}</h1>
+            <p className="machine mt-2 text-xs text-muted">
+              {farm.status}
+              {farm.tier ? ` · ${formatTier(farm.tier)}` : ''}
+              {` · ${tz}`}
+            </p>
+          </div>
+          {/* Map + KML entry points. */}
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <Link
+              href={`/farms/${farm.id}/map`}
+              className="rounded-md border border-hairline px-3 py-1.5 text-sm text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              Open map
+            </Link>
+            <a
+              href={`/api/farms/${farm.id}/kml`}
+              className="rounded-md border border-hairline px-3 py-1.5 text-sm text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              Download KML
+            </a>
+          </div>
         </div>
-        <Link
-          href={`/farms/${farm.id}/map`}
-          className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
-        >
-          Open map
-        </Link>
+
+        <nav className="flex gap-1 border-b border-hairline" aria-label="Farm operations">
+          <span
+            aria-current="page"
+            className="border-b-2 border-accent px-3 py-2 text-sm font-medium text-foreground"
+          >
+            Overview
+          </span>
+          {OPS_TABS.map((tab) => (
+            <Link
+              key={tab.slug}
+              href={`/farms/${farm.id}/${tab.slug}`}
+              className="border-b-2 border-transparent px-3 py-2 text-sm text-muted transition-colors hover:text-foreground"
+            >
+              {tab.label}
+            </Link>
+          ))}
+        </nav>
       </header>
 
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <h2 className="mb-1 text-base font-medium">Sensors reporting soon</h2>
-        <p className="text-sm text-muted">
-          Once your sensors are installed and checked, bunk, trough, and head counts start showing
-          up here on their own.
-        </p>
+      {/* ── The four standing numbers ── */}
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="rounded-lg border border-hairline bg-card p-4">
+          <p className="text-xs text-muted">Head on feed</p>
+          <p className="machine mt-1 text-lg text-foreground">
+            {overview.headOnFeed !== null ? overview.headOnFeed.toLocaleString('en-US') : '—'}
+          </p>
+          <p className="text-xs text-faint">
+            {pens.length > 0 ? `across ${pens.length} pen${pens.length === 1 ? '' : 's'}` : 'no cattle placed'}
+          </p>
+        </div>
+
+        {/* Projection — hay, and it says so. */}
+        <div className="rounded-lg border border-hairline bg-card p-4">
+          <p className="text-xs text-muted">Days of feed on hand</p>
+          <p className="machine mt-1 text-lg text-hay">
+            {overview.daysOfFeedEstimate !== null ? overview.daysOfFeedEstimate : '—'}
+          </p>
+          <p className="text-xs text-hay/70">
+            {overview.feedRateKgPerDay
+              ? `estimate · at ${formatMeasure(overview.feedRateKgPerDay, 'kg', { digits: 0 })}/day`
+              : 'estimate · needs a feeding rate'}
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-hairline bg-card p-4">
+          <p className="text-xs text-muted">Water today</p>
+          <p className="machine mt-1 text-lg text-water">
+            {overview.waterTodayL !== null
+              ? formatMeasure(overview.waterTodayL, 'l', { digits: 0 })
+              : '—'}
+          </p>
+          <p className="text-xs text-faint">
+            {overview.waterTodayL !== null ? 'metered since midnight' : 'no water metering yet'}
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-hairline bg-card p-4">
+          <p className="text-xs text-muted">Open alerts</p>
+          <p className={`machine mt-1 text-lg ${alertsOpen ? 'text-alert' : 'text-muted'}`}>
+            {overview.openAlerts}
+          </p>
+          <p className="text-xs text-faint">
+            {alertsOpen ? (
+              <Link href="/alerts" className="text-alert hover:underline">
+                Open alerts
+              </Link>
+            ) : (
+              'nothing needs attention'
+            )}
+          </p>
+        </div>
       </section>
 
+      <div className="grid gap-6 lg:grid-cols-[3fr_2fr]">
+        {/* ── What happened, newest first ── */}
+        <section className="rounded-lg border border-hairline bg-card p-6">
+          <h2 className="mb-4 text-base font-medium">Recent activity</h2>
+          {events.length > 0 ? (
+            <ul className="space-y-0">
+              {events.map((event) => (
+                <li
+                  key={event.key}
+                  className="flex items-baseline gap-3 border-b border-hairline/50 py-2 last:border-b-0"
+                >
+                  <span className="machine shrink-0 text-xs text-faint tabular-nums">
+                    {formatDayClock(event.at, tz)}
+                  </span>
+                  <span className={`min-w-0 flex-1 text-sm ${event.wrong ? 'text-alert' : 'text-foreground'}`}>
+                    {event.headline}
+                  </span>
+                  {event.detail ? (
+                    <span className="machine shrink-0 text-xs text-muted">{event.detail}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted">
+              Nothing logged in the last two weeks. Feedings, gate swings, and alerts land here as
+              they happen.
+            </p>
+          )}
+        </section>
+
+        {/* ── Pens holding cattle right now ── */}
+        <section className="rounded-lg border border-hairline bg-card p-6">
+          <h2 className="mb-4 text-base font-medium">Pens</h2>
+          {pens.length > 0 ? (
+            <ul className="space-y-2">
+              {pens.map((pen) => (
+                <li key={pen.penId}>
+                  <Link
+                    href={`/farms/${farm.id}/pens/${pen.penId}`}
+                    className="block rounded-md border border-hairline p-3 transition-colors hover:border-accent focus-visible:outline-2 focus-visible:outline-accent"
+                  >
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-sm text-foreground">{pen.penName}</span>
+                      <span className="machine text-sm text-foreground">
+                        {pen.head !== null ? `${pen.head.toLocaleString('en-US')} head` : '—'}
+                      </span>
+                    </div>
+                    <p className="mt-1 truncate text-xs text-muted">{pen.groupNames.join(' · ')}</p>
+                    <p className="machine mt-1 text-xs text-faint">
+                      {pen.lastFedAt
+                        ? `fed ${formatDayClock(pen.lastFedAt, tz)}${
+                            pen.lastFedKg !== null
+                              ? ` · ${formatMeasure(pen.lastFedKg, 'kg', { digits: 0 })}`
+                              : ''
+                          }${pen.lastFedSource ? ` · ${pen.lastFedSource}` : ''}`
+                        : 'no feeding logged yet'}
+                    </p>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted">
+              No group is placed in a pen right now. Pens show up here once cattle are moved in.
+            </p>
+          )}
+        </section>
+      </div>
+
+      {/* ── Farm details ── */}
       {canEdit ? (
         <section className="rounded-lg border border-hairline bg-card p-6">
           <h2 className="mb-4 text-base font-medium">Farm details</h2>
-          <FarmForm farmId={farm.id} name={farm.name} timezone={farm.timezone} />
+          <FarmForm farmId={farm.id} name={farm.name} timezone={tz} />
         </section>
       ) : (
         <section className="rounded-lg border border-hairline bg-card p-6">
