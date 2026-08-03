@@ -136,7 +136,22 @@ Consequences:
 MDP supports **virtual devices** per Application and a **Device Debug Panel**
 generating simulated reports (random or custom, single or batched), plus a
 Webhook Simulation tab with optional historic record. Phase 4 proves the whole
-pipeline with these. **Do not write a custom simulator.**
+pipeline with these. **Do not write a custom simulator** — for proving the
+pipeline.
+
+> **AMENDED 2026-08-03, owner decision ("you can do a virtual device for
+> now").** The rule above stands for *pipeline verification*, and is why
+> `test-requests.http` plus the MDP Debug Panel remain the acceptance path. It
+> does not cover *product demonstration*: the Debug Panel emits one reading at
+> a time on demand, knows nothing of a farm's layout, and cannot write a month
+> of history for the trend and forecast screens to regress on. `tools/simulator`
+> is the scoped exception — a virtual fleet driven from the real
+> `map_features` / `groups` / `feed_schedules` rows, emitting envelopes whose
+> shape is pinned by unit tests against `validate.ts`, `signature.ts` and
+> `packages/normalize` rather than invented. Every device it drives carries a
+> `DEMO_` DevEUI, so simulated data can never be mistaken for hardware. See
+> `docs/SIMULATOR.md`, including its honest list of what the behaviour model
+> does not model.
 
 ### 4.4 Gateways
 
@@ -339,7 +354,11 @@ to MDP for operations.
 
 ## 13. Things that do not exist (by design)
 
-No MQTT consumer. No ChirpStack. No VPS. No custom payload simulator. No
-self-serve device onboarding. No per-usage billing. No separate time-series
-database. No Mapbox. No customer-visible LoRaWAN vocabulary. If a change
-seems to require one of these, stop and raise it with the owner first.
+No MQTT consumer. No ChirpStack. No VPS. No self-serve device onboarding. No
+per-usage billing. No separate time-series database. No Mapbox. No
+customer-visible LoRaWAN vocabulary. If a change seems to require one of these,
+stop and raise it with the owner first.
+
+"No custom payload simulator" was on this list until 2026-08-03. It was raised
+with the owner and amended — see §4.3 and `docs/SIMULATOR.md`. The simulator
+lives in `tools/`, is not part of the runtime, and drives only `DEMO_` devices.
