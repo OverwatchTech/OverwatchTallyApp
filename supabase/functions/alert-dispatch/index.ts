@@ -119,7 +119,14 @@ async function dispatchAlert(
   // The prefix costs 24 of the 160 characters in a segment, so it is worth
   // knowing that it can tip a long message into a second segment. That is an
   // acceptable trade for being identifiable; it would not be for a decoration.
-  const smsText = `Overwatch Tally Alert - ${message.subject}. ${message.body}`;
+  //
+  // Blank line between the headline and the detail, not ". ". The subject is a
+  // headline and headlines do not take a full stop, and on a lock screen the
+  // break is what separates "what happened" from "where and what to do about
+  // it" — read at arm's length in a feed alley, that gap does more work than
+  // the punctuation did. Costs the same two characters the ". " did, and LF is
+  // in the GSM-7 alphabet so it does not force a UCS-2 downgrade.
+  const smsText = `Overwatch Tally Alert - ${message.subject}\n\n${message.body}`;
   const receipts: DeliveryReceipt[] = [];
 
   for (const step of plan) {
