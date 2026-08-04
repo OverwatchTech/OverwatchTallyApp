@@ -25,7 +25,14 @@
 // Response contract (bodies are ALWAYS empty — never echo request contents):
 //   200 accepted (or replay)   404 unknown/ill-shaped token or path
 //   400 malformed envelope     405 not POST          413 body too large
-//   429 rate limited           500 raw persist failed (MDP should retry)
+//   408 body read deadline     429 rate limited
+//   500 raw persist failed, or batch deadline hit (MDP should retry)
+//
+// Every path above answers. Nothing in this function may block without a
+// deadline: an isolate the platform kills at 150 s executes no compensation,
+// no dead-letter write, and no log line — the one failure mode this file's
+// durability rules cannot survive. See BODY_READ_TIMEOUT_MS, BATCH_DEADLINE_MS
+// (below) and the timeout note in pg.ts.
 
 import { MilesightMdpSource, type ParsedIngest, type TelemetrySource } from './source.ts';
 import { envelopeBatch, type MdpEnvelope } from './validate.ts';
@@ -37,6 +44,24 @@ import { PgError, PostgrestClient } from './pg.ts';
 // ── configuration ───────────────────────────────────────────────────────────
 
 const MAX_BODY_BYTES = 256 * 1024; // envelopes are ~1 KB; anything huge is abuse
+// INCIDENT 2026-08-03 18:28Z: ~70 concurrent POSTs on a token belonging to no
+// farm each held the isolate for the full 150-second platform wall clock and
+// answered 504. They never reached the database — `ingest_event_ids` and
+// `raw_events` stayed in exact lockstep (99/99) across the window and the one
+// live farm ingested at its normal rate throughout. The only operation ahead
+// of the first query that can block on the network is the body read, and it
+// had no deadline: a caller that opens a POST and then stops sending owns an
+// isolate until the platform reclaims it. MAX_BODY_BYTES did not help — it was
+// checked AFTER the read completed, so it bounded size but never time.
+// The deadline below is what makes the read refusable; the Content-Length
+// pre-check makes an oversized body refusable before a byte is read.
+const BODY_READ_TIMEOUT_MS = 10_000;
+// A whole delivery must finish well inside the platform's 150 s wall clock.
+// Exceeding this answers 500 rather than letting the isolate be killed: 500 is
+// a retry MDP understands, and envelopes already ingested dedup on that retry,
+// so the remainder lands next time. An isolate killed mid-batch runs no code
+// at all — no compensation, no dead-letter, no log line.
+const BATCH_DEADLINE_MS = 60_000;
 const RATE_WINDOW_MS = 60_000;
 // 60 sensors at 10-minute intervals ≈ 6 events/min/farm; 300/min absorbs
 // Debug Panel batches and gateway backlog flushes with a wide margin.
@@ -101,6 +126,35 @@ function tokenPrefix(token: string): string {
   return `${token.slice(0, 6)}…`;
 }
 
+/** Thrown by readBody when the caller stops sending; distinguishes a slow
+ *  sender from a malformed one so the two get different reason codes. */
+class BodyReadTimeout extends Error {
+  constructor() {
+    super('body_read_timeout');
+    this.name = 'BodyReadTimeout';
+  }
+}
+
+/**
+ * Read the request body under a deadline. `Request.text()` takes no signal, so
+ * the timer races it and the stream is cancelled on the losing path — without
+ * that cancel the connection stays open and the isolate keeps paying for it,
+ * which is the whole failure this guards against.
+ */
+async function readBody(req: Request, ms: number): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      req.text(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new BodyReadTimeout()), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /**
  * Extract the farm token: the path is /mdp-webhook/{farm_token} (§5.1), which
  * the platform may present as /{token}, /mdp-webhook/{token}, or
@@ -137,6 +191,8 @@ function scheduleBackground(work: Promise<void>): void {
 // ── request handling ────────────────────────────────────────────────────────
 
 async function handleRequest(req: Request): Promise<Response> {
+  const startedAt = Date.now();
+
   // MDP validates a callback URI with a non-POST preflight before it will
   // accept it — its Test button reports "the callback URI is invalid" when we
   // answer 405. Ack liveness probes with an empty 200 WITHOUT looking the
@@ -162,7 +218,33 @@ async function handleRequest(req: Request): Promise<Response> {
     return empty(429);
   }
 
-  const text = await req.text();
+  // Refuse an oversized body before reading a byte of it. A liar gets caught
+  // by the post-read check below; an honest client is spared the upload.
+  const declaredLength = Number(req.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    log({ evt: 'reject', reason: 'body_too_large', token: tokenPrefix(token), bytes: declaredLength });
+    return empty(413);
+  }
+
+  let text: string;
+  try {
+    text = await readBody(req, BODY_READ_TIMEOUT_MS);
+  } catch (err) {
+    if (err instanceof BodyReadTimeout) {
+      // Best-effort: `req.text()` has already locked the stream, so this
+      // usually throws and is caught. Answering at all is what bounds the
+      // isolate — the raced read is abandoned when the response goes out.
+      try {
+        await req.body?.cancel();
+      } catch {
+        // Locked by the raced read, as expected. Nothing owed.
+      }
+      log({ evt: 'reject', reason: 'body_read_timeout', token: tokenPrefix(token) });
+      return empty(408);
+    }
+    log({ evt: 'reject', reason: 'body_read_failed', token: tokenPrefix(token) });
+    return empty(400);
+  }
   if (text.length > MAX_BODY_BYTES) {
     log({ evt: 'reject', reason: 'body_too_large', token: tokenPrefix(token), bytes: text.length });
     return empty(413);
@@ -253,8 +335,21 @@ async function handleRequest(req: Request): Promise<Response> {
   const receivedAt = new Date().toISOString();
 
   let accepted = 0;
+  let processed = 0;
   for (const item of parsed) {
+    // Yield the batch before the platform takes the isolate — BATCH_DEADLINE_MS.
+    if (Date.now() - startedAt > BATCH_DEADLINE_MS) {
+      log({
+        evt: 'batch_deadline_exceeded',
+        farmId: farm.id,
+        processed,
+        accepted,
+        remaining: parsed.length - processed,
+      });
+      return empty(500);
+    }
     const outcome = await ingestOne(farm, item, receivedAt);
+    processed += 1;
     if (outcome === 'persist_failed') return empty(500);
     if (outcome === 'accepted') accepted += 1;
   }
