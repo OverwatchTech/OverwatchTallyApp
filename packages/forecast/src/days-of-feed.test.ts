@@ -7,12 +7,15 @@ import {
 
 /**
  * The golden stack: 100 round bales at 500 kg as fed, 87 % dry matter, fed on
- * the ground at 30 % waste, against 900 kg of dry matter a day.
+ * the ground at 30 % waste, against 900 kg of dry matter a day MEASURED AS
+ * DISPENSED — a scale reading of what left the stack, which is what every
+ * surface in apps/web divides by.
  *
  *   as fed   100 × 500              = 50,000 kg
  *   dry      50,000 × 0.87          = 43,500 kg
- *   feedable 43,500 × (1 − 0.30)    = 30,450 kg
- *   days     30,450 ÷ 900           = 33.8333…
+ *   waste    43,500 × 0.30          = 13,050 kg   (reported, not deducted)
+ *   runway   43,500                                (dispensed already carries it)
+ *   days     43,500 ÷ 900           = 48.3333…
  */
 const GOLDEN: DaysOfFeedInput = {
   commodity: 'Grass hay, 1st cutting',
@@ -21,8 +24,12 @@ const GOLDEN: DaysOfFeedInput = {
   baleWeightSource: 'calibrated',
   dryMatterPct: 87,
   wasteFactor: 0.3,
+  demandBasis: 'dispensed',
   dmDemandKgPerDay: 900,
 };
+
+/** The same stack against a ration sheet instead of a scale. */
+const GOLDEN_BOOK: DaysOfFeedInput = { ...GOLDEN, demandBasis: 'book_intake' };
 
 describe('daysOfFeedOnHand — the golden arithmetic', () => {
   const result = daysOfFeedOnHand(GOLDEN);
@@ -32,19 +39,21 @@ describe('daysOfFeedOnHand — the golden arithmetic', () => {
     expect(result.dryMatterKg).toBeCloseTo(43_500, 6);
   });
 
-  it('takes waste off the dry matter, not the as-fed weight', () => {
+  it('sizes the waste off the dry matter, not the as-fed weight', () => {
     expect(result.feedableDryMatterKg).toBeCloseTo(30_450, 6);
     expect(result.wasteDryMatterKg).toBeCloseTo(13_050, 6);
   });
 
-  it('divides feedable dry matter by demand', () => {
-    expect(result.days).toBeCloseTo(33.8333333, 5);
+  it('divides the WHOLE dry-matter stack when demand is dispensed', () => {
+    expect(result.runwayDryMatterKg).toBeCloseTo(43_500, 6);
+    expect(result.wasteAppliedToRunway).toBe(false);
+    expect(result.days).toBeCloseTo(48.3333333, 5);
   });
 
-  it('is 21.7 days shorter than the naive answer — the reason both multipliers are mandatory', () => {
+  it('is 7.2 days shorter than the naive answer — the dry-matter conversion, and only that', () => {
     const naiveDays = (GOLDEN.baleCount * GOLDEN.baleWeightKg) / GOLDEN.dmDemandKgPerDay;
     expect(naiveDays).toBeCloseTo(55.5555556, 5);
-    expect(naiveDays - (result.days ?? 0)).toBeCloseTo(21.7222222, 5);
+    expect(naiveDays - (result.days ?? 0)).toBeCloseTo(7.2222222, 5);
   });
 
   it('echoes every input back', () => {
@@ -52,12 +61,65 @@ describe('daysOfFeedOnHand — the golden arithmetic', () => {
     expect(result.invalid).toEqual([]);
   });
 
-  it('names the dry-matter and waste coefficients in its assumptions', () => {
+  it('names the dry-matter, basis and waste coefficients in its assumptions', () => {
     const byKey = new Map(result.assumptions.map((a) => [a.key, a]));
     expect(byKey.get('dry_matter_conversion')?.value).toBe(87);
+    expect(byKey.get('demand_basis')?.value).toBe('dispensed');
     expect(byKey.get('waste_factor')?.value).toBe(0.3);
     expect(byKey.get('waste_factor')?.source).toBe('caller');
     expect(byKey.get('bale_weight_source')?.value).toBe('calibrated');
+  });
+});
+
+// ===========================================================================
+// THE DEFECT THIS MODULE SHIPPED, PINNED DOWN
+// ===========================================================================
+describe('daysOfFeedOnHand — the basis decides whether waste divides the runway', () => {
+  const dispensed = daysOfFeedOnHand(GOLDEN);
+  const book = daysOfFeedOnHand(GOLDEN_BOOK);
+
+  it('does not discount the stack against a dispensed rate', () => {
+    expect(dispensed.runwayDryMatterKg).toBeCloseTo(dispensed.dryMatterKg ?? 0, 6);
+    expect(dispensed.days).toBeCloseTo(48.3333333, 5);
+  });
+
+  it('discounts the stack against a book intake target', () => {
+    expect(book.runwayDryMatterKg).toBeCloseTo(book.feedableDryMatterKg ?? 0, 6);
+    expect(book.wasteAppliedToRunway).toBe(true);
+    expect(book.days).toBeCloseTo(33.8333333, 5);
+  });
+
+  it('separates the two answers by exactly 1 ÷ (1 − waste) — the size of the old bug', () => {
+    expect((dispensed.days ?? 0) / (book.days ?? 1)).toBeCloseTo(1 / (1 - 0.3), 9);
+  });
+
+  it('still reports and discloses the waste factor under the dispensed basis', () => {
+    expect(dispensed.wasteDryMatterKg).toBeCloseTo(13_050, 6);
+    expect(dispensed.feedableDryMatterKg).toBeCloseTo(30_450, 6);
+    const waste = dispensed.assumptions.find((a) => a.key === 'waste_factor');
+    expect(waste?.value).toBe(0.3);
+    expect(waste?.detail ?? '').toContain('NOT applied');
+  });
+
+  it('refuses to answer when nobody said which basis the demand is on', () => {
+    const result = daysOfFeedOnHand({
+      ...GOLDEN,
+      demandBasis: undefined as unknown as 'dispensed',
+    });
+    expect(result.days).toBeNull();
+    expect(result.confidence).toBe('none');
+    expect(result.invalid).toContain('demand_basis_missing');
+    expect(result.demandBasis).toBeNull();
+  });
+
+  it('carries the basis onto the band, so the band cannot sit on a different basis', () => {
+    const banded = daysOfFeedOnHand({
+      ...GOLDEN,
+      dmDemandLowKgPerDay: 800,
+      dmDemandHighKgPerDay: 1000,
+    });
+    expect(banded.daysLow).toBeCloseTo(43.5, 6);
+    expect(banded.daysHigh).toBeCloseTo(54.375, 6);
   });
 });
 
@@ -66,18 +128,39 @@ describe('daysOfFeedOnHand — the multipliers change the answer by weeks', () =
     const dry = daysOfFeedOnHand({ ...GOLDEN, dryMatterPct: 90 });
     const wet = daysOfFeedOnHand({ ...GOLDEN, dryMatterPct: 80 });
     expect(dry.days ?? 0).toBeGreaterThan(wet.days ?? 0);
-    expect((dry.days ?? 0) - (wet.days ?? 0)).toBeCloseTo(3.888888, 4);
+    expect((dry.days ?? 0) - (wet.days ?? 0)).toBeCloseTo(5.5555556, 4);
   });
 
-  it('ring feeders stretch a stack by nearly two weeks over ground feeding', () => {
-    const ground = daysOfFeedOnHand({ ...GOLDEN, wasteFactor: WASTE_FACTOR_GUIDANCE.ground.midpoint });
+  it('ring feeders stretch a stack by nearly two weeks — against a BOOK target', () => {
+    const ground = daysOfFeedOnHand({
+      ...GOLDEN_BOOK,
+      wasteFactor: WASTE_FACTOR_GUIDANCE.ground.midpoint,
+    });
     const ring = daysOfFeedOnHand({
-      ...GOLDEN,
+      ...GOLDEN_BOOK,
       wasteFactor: WASTE_FACTOR_GUIDANCE.ring_feeder.midpoint,
     });
     expect(ground.days).toBeCloseTo(33.8333333, 5);
     expect(ring.days).toBeCloseTo(44.7083333, 5);
     expect((ring.days ?? 0) - (ground.days ?? 0)).toBeCloseTo(10.875, 3);
+  });
+
+  it('the feeding method moves no days at all against a MEASURED rate', () => {
+    // Because it cannot: a farm that switches to ring feeders will dispense
+    // less, and the measured rate is what shows it. Reading the improvement
+    // off the coefficient instead would double-count the change.
+    const ground = daysOfFeedOnHand({
+      ...GOLDEN,
+      wasteFactor: WASTE_FACTOR_GUIDANCE.ground.midpoint,
+    });
+    const ring = daysOfFeedOnHand({
+      ...GOLDEN,
+      wasteFactor: WASTE_FACTOR_GUIDANCE.ring_feeder.midpoint,
+    });
+    expect(ground.days).toBeCloseTo(48.3333333, 5);
+    expect(ring.days).toBeCloseTo(48.3333333, 5);
+    // ...but the loss it sizes does move, and is still reported.
+    expect(ring.wasteDryMatterKg ?? 0).toBeLessThan(ground.wasteDryMatterKg ?? 0);
   });
 
   it('publishes guidance ranges without applying them', () => {
@@ -96,8 +179,8 @@ describe('daysOfFeedOnHand — the confidence band', () => {
   });
 
   it('inverts the band: eating faster means fewer days', () => {
-    expect(banded.daysLow).toBeCloseTo(30.45, 6);
-    expect(banded.daysHigh).toBeCloseTo(38.0625, 6);
+    expect(banded.daysLow).toBeCloseTo(43.5, 6);
+    expect(banded.daysHigh).toBeCloseTo(54.375, 6);
     expect(banded.daysLow ?? 0).toBeLessThan(banded.days ?? 0);
     expect(banded.daysHigh ?? 0).toBeGreaterThan(banded.days ?? 0);
   });
@@ -182,9 +265,20 @@ describe('daysOfFeedOnHand — the multipliers are not optional', () => {
   });
 
   it('accepts zero waste as an explicit choice', () => {
-    const result = daysOfFeedOnHand({ ...GOLDEN, wasteFactor: 0 });
+    const result = daysOfFeedOnHand({ ...GOLDEN_BOOK, wasteFactor: 0 });
     expect(result.invalid).toEqual([]);
     expect(result.days).toBeCloseTo(48.3333333, 5);
+  });
+
+  it('still demands a waste factor under the dispensed basis, even though it does not divide', () => {
+    // It is reported, not ignored — "how much of what we haul out gets eaten"
+    // is a question the screen answers, and a blank is not an answer.
+    const result = daysOfFeedOnHand({
+      ...GOLDEN,
+      wasteFactor: undefined as unknown as number,
+    });
+    expect(result.invalid).toContain('waste_factor_missing');
+    expect(result.days).toBeNull();
   });
 });
 
@@ -245,10 +339,11 @@ describe('daysOfFeedOnHand — degenerate input', () => {
       baleWeightSource: 'nominal',
       dryMatterPct: 200,
       wasteFactor: 3,
+      demandBasis: undefined as unknown as 'dispensed',
       dmDemandKgPerDay: 0,
     });
-    expect(result.invalid.length).toBe(5);
-    expect(result.confidenceReasons.length).toBe(5);
+    expect(result.invalid.length).toBe(6);
+    expect(result.confidenceReasons.length).toBe(6);
     expect(result.days).toBeNull();
   });
 

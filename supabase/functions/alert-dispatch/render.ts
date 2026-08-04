@@ -169,6 +169,21 @@ function customerMessage(alert: QueuedAlert): RenderedMessage {
         subject: `${farm} stopped sending data`,
         body: `${farm}: readings are not coming through right now. We can see it and we are on it.`,
       };
+    // Reached when the rule sets customer_visible, which migration 0025 turns
+    // on by default. The enum is `ingest_stalled`; the word "ingest" is in the
+    // same family as gateway, webhook, uplink and telemetry and never reaches
+    // a phone (CLAUDE.md #5). GSM-7 only: plain hyphen, no en dash.
+    case 'ingest_stalled':
+      // No duration in this one. `details.silent_minutes` is frozen at open
+      // time and an escalation tier can send this 45 minutes later, so a
+      // figure here would understate a running outage (CLAUDE.md #8). The
+      // alerts screen carries the live count.
+      return {
+        subject: `Nothing is reporting from ${farm}`,
+        body:
+          `${farm}: every sensor on the place has gone quiet at once, so nothing is being ` +
+          `recorded. We can see it and we are on it.`,
+      };
     default:
       return {
         subject: `Something needs attention at ${farm}`,
@@ -198,6 +213,24 @@ function staffMessage(alert: QueuedAlert): RenderedMessage {
           `${str(d, 'last_seen_at', 'never')}. Every device behind it is dark. ` +
           `Check MDP console before rolling a truck.`,
       };
+    // Reached when a rule leaves customer_visible off. Same facts as the
+    // /admin panel, in the budget a phone at 04:00 allows.
+    case 'ingest_stalled': {
+      const minutes = num(d, 'silent_minutes');
+      const live = num(d, 'sensors_live');
+      return {
+        subject,
+        body:
+          `Nothing has reached us from ${alert.farm_name} since ` +
+          `${str(d, 'last_seen_at', 'an unknown time')}` +
+          // "at open" because details freeze when the row is written and an
+          // escalation tier can send this 45 min later.
+          (minutes !== null ? ` (${Math.round(minutes)} min at open)` : '') +
+          (live !== null ? `. ${live} sensors live` : '') +
+          `. Driven by our own persisted readings, not by MDP liveness. ` +
+          `Check MDP delivery and the farm backhaul before rolling a truck.`,
+      };
+    }
     default:
       return {
         subject,

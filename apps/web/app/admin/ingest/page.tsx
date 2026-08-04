@@ -26,6 +26,7 @@ import { Chip, Empty, FactRow, Facts, Panel, Stat } from '../console-ui';
 import { relativeTime, shortDateTime } from '@/lib/admin/time';
 import { RateChart } from './rate-chart';
 import { RetryForm } from './retry-form';
+import { readIngestStalls, silenceLabel, stallSentence } from './stalls';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,15 +44,18 @@ export default async function IngestPage({
 
   await recordStaffAction({ action: 'ingest.health', table: 'raw_events' });
 
-  const [rate, dlq, budget, farms] = await Promise.all([
+  const [rate, dlq, budget, farms, stallReport] = await Promise.all([
     readIngestRate(supabase, windowHours),
     readDeadLetterQueue(supabase),
     readBudget(supabase),
     readFarmIngest(supabase),
+    readIngestStalls(supabase),
   ]);
 
   const dlqWrong = dlq.openCount > 0;
   const overThreshold = dlq.openCount >= dlq.alertThreshold;
+  const stalls = stallReport.rows;
+  const stalledFarms = new Set(stalls.map((row) => row.farmId));
 
   const farmColumns: Array<DataTableColumn<FarmIngestRow>> = [
     {
@@ -79,8 +83,13 @@ export default async function IngestPage({
       mono: true,
       align: 'right',
       cell: (row) => (
-        <span className={row.lastEventAt === null ? 'ow-wrong' : undefined}>
+        <span
+          className={
+            row.lastEventAt === null || stalledFarms.has(row.farmId) ? 'ow-wrong' : undefined
+          }
+        >
           {relativeTime(row.lastEventAt)}
+          {stalledFarms.has(row.farmId) ? ' · stalled' : ''}
         </span>
       ),
     },
@@ -134,12 +143,83 @@ export default async function IngestPage({
           note="acknowledged, carried no data"
         />
         <Stat
+          label="Farms gone silent"
+          value={stallReport.error === null ? stalls.length : '—'}
+          tone={stalls.length > 0 || stallReport.error !== null ? 'wrong' : 'plain'}
+          note={
+            stallReport.error !== null
+              ? 'the read failed — unknown, not zero'
+              : stalls.length === 0
+                ? 'every farm is still reporting'
+                : `longest ${silenceLabel(Math.max(...stalls.map((s) => s.silentMinutes ?? 0)))}`
+          }
+        />
+        <Stat
           label="MDP API today"
           value={`${budget.spent} / ${budget.allowance}`}
           tone={budget.approachingCap ? 'wrong' : 'plain'}
           note={`${budget.plan} plan · ${budget.deviceCount} devices`}
         />
       </KpiGrid>
+
+      {/* ── The outage alert, on a screen a human reads ────────────
+          `ingest_stalled` (migration 0021) is one alert per farm, opened off
+          our OWN last-persisted reading — MDP's liveness claims are never
+          consulted, so MDP going dark cannot hide it. It used to open into a
+          table nothing read. This is where it lands now. */}
+      <Panel
+        title="Farms we are not hearing from"
+        note={
+          <>
+            Opened by the <span className="ow-machine">ingest_stalled</span> rule off the last
+            reading we persisted, not off anything MDP asserts. No text message goes out for these
+            — the dispatcher is deployed but unscheduled until{' '}
+            <span className="ow-machine">alert_dispatch_token</span> is in Vault, so this screen and
+            the rancher&rsquo;s alerts screen are the only places it lands.
+          </>
+        }
+      >
+        {stallReport.error !== null ? (
+          <div className="ow-listitem">
+            <p className="ow-body ow-wrong">
+              <span className="ow-machine">staff_ingest_stalls()</span> failed:{' '}
+              {stallReport.error}. This list is unknown, not empty — a total outage would look
+              exactly like an empty list if this said nothing.
+            </p>
+          </div>
+        ) : stalls.length === 0 ? (
+          <Empty>
+            Every farm with live sensors has sent us something inside its threshold. This list is
+            empty when ingest is healthy, and it is the list to read first when it is not.
+          </Empty>
+        ) : (
+          <ul>
+            {stalls.map((row) => (
+              <li key={row.alertId} className="ow-listitem">
+                <div className="ow-inline" style={{ alignItems: 'flex-start' }}>
+                  <Chip tone="wrong">{silenceLabel(row.silentMinutes)}</Chip>
+                  <div style={{ minWidth: 0, flex: '1 1 24rem' }}>
+                    <p className="ow-body ow-wrong">{stallSentence(row)}</p>
+                    <p className="ow-quiet ow-machine">
+                      last envelope {relativeTime(row.lastHeardAt)} · threshold{' '}
+                      {row.staleMinutes ?? '—'} min · opened {shortDateTime(row.openedAt)}
+                      {row.acknowledgedAt === null ? '' : ' · acknowledged'} ·{' '}
+                      {row.customerVisible
+                        ? 'the customer sees their own plain-language version'
+                        : 'staff only — the customer sees nothing about this'}
+                    </p>
+                  </div>
+                  <div style={{ marginLeft: 'auto', flex: 'none' }}>
+                    <Link href={`/admin/farms/${row.farmId}`} className="ow-btn sm">
+                      Open farm
+                    </Link>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
 
       <Panel
         title="Raw event rate"

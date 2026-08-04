@@ -18,9 +18,21 @@
 // dispatcher will do with what they saved. If one changes, change both —
 // the shapes are documented in supabase/functions/alert-dispatch/README.md.
 //
-// CLAUDE.md #5: gateway_offline is the one kind whose customer copy has to
-// dodge its own name. It is staff-facing by default (`customer_visible:
-// false`) and the word never reaches this screen.
+// CLAUDE.md #5: gateway_offline and ingest_stalled are the two kinds whose
+// customer copy has to dodge their own names. Neither "gateway" nor "ingest"
+// ever reaches this screen — and neither does the raw enum, which is the
+// defect this file's `visibleRules()` and `kindLabel()` exist to make
+// impossible. `ingest_stalled` sat FIRST in the watched list, spelled exactly
+// like that, with an empty explanation under it, because the sort keyed on
+// `RULE_KINDS.indexOf()` and an unlisted kind returns -1.
+//
+// A KIND CAN BE STAFF-FACING, AND THE RULE ROW IS NOT THE ALERT. The reliability
+// track assumed `staff_only` on the alert kept the kind off customer screens.
+// It does not: `staff_only` is stamped on ALERT rows and filtered by
+// `alerts_member_read`, while `alert_rules` has no such filter and this page
+// lists every rule the org can read. The param that governs a customer's view
+// of the RULE is `params.customer_visible`, and honouring it is `visibleRules()`
+// below.
 
 import { formatMeasure } from '@overwatch/ui';
 
@@ -50,6 +62,7 @@ export const RULE_KINDS: readonly AlertKind[] = [
   'days_on_hand_low',
   'sensor_offline',
   'battery_low',
+  'ingest_stalled',
   'gateway_offline',
 ];
 
@@ -90,6 +103,11 @@ export const KIND_COPY: Record<AlertKind, KindCopy> = {
     label: 'A sensor battery is low',
     watches: 'A sensor is down to the charge you set.',
   },
+  ingest_stalled: {
+    label: 'The whole place stopped reporting',
+    watches:
+      'Every sensor on the place has gone quiet at once, so nothing is being recorded. That points at the line out rather than at any one sensor, and we are watching it from our end too.',
+  },
   gateway_offline: {
     label: 'The ranch stopped sending data',
     watches:
@@ -104,6 +122,94 @@ export const KIND_COPY: Record<AlertKind, KindCopy> = {
 export function kindLabel(kind: string): string {
   const copy = KIND_COPY[kind as AlertKind];
   return copy?.label ?? 'Something needs attention';
+}
+
+/** The one line under the label. Never empty, never the enum. */
+export function kindWatches(kind: string): string {
+  const copy = KIND_COPY[kind as AlertKind];
+  return (
+    copy?.watches ??
+    'We are watching for this one. Call us and we will tell you exactly what it looks at.'
+  );
+}
+
+// ── What turning a rule off actually costs ──────────────────────
+
+/**
+ * The line that sits beside "Watch for this", for the kinds where unticking
+ * the box does something the label does not say out loud.
+ *
+ * WHY THIS EXISTS. Migration 0025 made the whole-place outage alert customer
+ * visible, which handed the rancher an ordinary "Watch for this" checkbox for
+ * it. Until 0026 that box was a trapdoor: `sensor_offline` deferred every
+ * per-sensor alert to the whole-place alert during an outage, and nothing
+ * checked that the whole-place alert was still switched on. Untick it, lose
+ * the outage alert, and lose the per-sensor alerts that were standing down
+ * for it. Zero alerts during a total outage, with no way to know you had done
+ * it.
+ *
+ * 0026 couples the two: a deferral only happens while the alert it defers to
+ * is enabled and reaching you. So the box is safe to untick now — but it is
+ * still a real choice with a real consequence, and a control that changes
+ * what a DIFFERENT alert does has to say so. The consequence is stated here
+ * rather than by disabling the input, because a dead checkbox with no
+ * explanation teaches a rancher nothing.
+ */
+const KIND_ENABLED_NOTE: Partial<Record<AlertKind, string>> = {
+  ingest_stalled:
+    'Leave this unticked and a whole-place outage still reaches you — as one alert for every ' +
+    'sensor that has gone quiet, rather than one for the place. You hear about it either way. ' +
+    'This decides whether it arrives as a line or as a list.',
+};
+
+/** What unticking this rule costs, or null when there is nothing extra to say. */
+export function kindEnabledNote(kind: string): string | null {
+  return KIND_ENABLED_NOTE[kind as AlertKind] ?? null;
+}
+
+// ── What a customer is shown ────────────────────────────────────
+
+/**
+ * Kinds that describe OUR pipeline rather than the ranch, and so are
+ * staff-facing unless a rule says otherwise. Each carries a `customer_visible`
+ * param; `mdp_system_messages` has no rule at all (the webhook opens it) and
+ * is listed so a hand-made row could never surface either.
+ */
+const STAFF_GATED: ReadonlySet<string> = new Set([
+  'gateway_offline',
+  'ingest_stalled',
+  'mdp_system_messages',
+]);
+
+/** Whether a rule row belongs on a customer screen at all. */
+export function isCustomerVisibleRule(kind: string, rawParams: unknown): boolean {
+  if (!STAFF_GATED.has(kind)) return true;
+  return paramsOf(rawParams)['customer_visible'] === true;
+}
+
+/**
+ * The rules a customer may read, in reading order.
+ *
+ * Two jobs, both of which were failing on /settings/notifications:
+ *
+ *  1. Drop the rules that are ours, not theirs. `staff_only` hides the ALERT;
+ *     nothing was hiding the RULE, so a staff-only kind sat in the list of
+ *     things the customer is told about.
+ *  2. Sort by RULE_KINDS without letting an unlisted kind win. `indexOf`
+ *     returns -1 for anything not in the list, which sorts it to the TOP —
+ *     so the newest, least-explained kind led the page. Unknown sorts last
+ *     now, and `kindLabel`/`kindWatches` guarantee it still reads as English.
+ */
+export function visibleRules<T extends { kind: string; params: unknown }>(
+  rules: readonly T[],
+): T[] {
+  const rank = (kind: string): number => {
+    const index = RULE_KINDS.indexOf(kind as AlertKind);
+    return index === -1 ? RULE_KINDS.length : index;
+  };
+  return rules
+    .filter((rule) => isCustomerVisibleRule(rule.kind, rule.params))
+    .sort((a, b) => rank(a.kind) - rank(b.kind));
 }
 
 // ── The numbers a rule is set to ────────────────────────────────
@@ -217,13 +323,33 @@ export function ruleSettings(kind: string, rawParams: unknown): RuleSetting[] {
       return [
         { label: 'Alerts below', value: `${num(p, 'min_days', 14)} days` },
         { label: 'Rate measured over', value: `${num(p, 'rate_days', 21)} days` },
-        { label: 'Waste allowed for', value: stated },
+        // CHANGED by migration 0024. It is no longer "allowed for": the
+        // feeding rate this rule divides by is measured as feed dispensed to
+        // the bunk, and dispensed feed already contains what gets wasted, so
+        // taking it off the stack as well counted the loss twice and read
+        // short by 1 ÷ (1 − waste). The line stays — the factor is still
+        // resolved and still shown on the alert's evidence block — but it no
+        // longer claims to move this threshold. Silently deleting the row
+        // would leave a reader unable to tell "it stopped applying" from
+        // "we stopped saying".
+        { label: 'Waste on record', value: `${stated} · does not change the days` },
       ];
     }
     case 'sensor_offline':
       return [{ label: 'Quiet for', value: minutes(num(p, 'after_minutes', 30)) }];
     case 'battery_low':
       return [{ label: 'Alerts below', value: `${num(p, 'min_pct', 15)}%` }];
+    // Defaults mirror app.alert_cond_ingest_stalled (migration 0021 §4).
+    // `min_devices` is not shown: it is a guard against a farm that has never
+    // been installed, not a threshold a rancher would set.
+    case 'ingest_stalled':
+      return [
+        { label: 'Everything quiet for', value: minutes(num(p, 'stale_minutes', 60)) },
+        {
+          label: 'Reaches you',
+          value: p['customer_visible'] === true ? 'yes' : 'no — we handle it',
+        },
+      ];
     case 'gateway_offline':
       return [
         { label: 'Quiet for', value: minutes(num(p, 'after_minutes', 60)) },

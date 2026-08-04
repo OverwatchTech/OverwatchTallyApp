@@ -35,6 +35,14 @@ export interface RuleDeliveryDraft {
   silenced: Severity[];
   secondAfter: number;
   thirdAfter: number;
+  /**
+   * What unticking "Watch for this" costs, for the kinds where it does
+   * something the label does not say — today that is the whole-place outage
+   * alert, whose box also governs whether the per-sensor alerts stand down
+   * for it (migration 0026, `kindEnabledNote` in lib/alerts/rules.ts). Null
+   * for every other kind, where "watch for this" means exactly itself.
+   */
+  enabledNote: string | null;
 }
 
 export function RuleDeliveryForm({ draft }: { draft: RuleDeliveryDraft }) {
@@ -55,6 +63,11 @@ export function RuleDeliveryForm({ draft }: { draft: RuleDeliveryDraft }) {
         <input type="checkbox" name="ruleEnabled" defaultChecked={draft.ruleEnabled} />
         Watch for this
       </label>
+
+      {/* The consequence sits with the control, not in a footnote. Muted grey,
+          not orange: this is a choice with a trade in it, not something that
+          is wrong (CLAUDE.md #4). */}
+      {draft.enabledNote !== null && <p className="ow-quiet">{draft.enabledNote}</p>}
 
       <div className="ow-group">
         <span className="gt">Quiet hours</span>

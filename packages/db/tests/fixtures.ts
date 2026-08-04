@@ -8,10 +8,73 @@
  * Every row and every user is created with the service role (which bypasses
  * RLS) and carries a unique run prefix, so two runs — local and CI, or two CI
  * shards — never collide and teardown never touches anything it did not make.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ *  THE FIXTURE WORLD MUST BE INERT TO EVERY SCHEDULED JOB.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * The suite asserts that org B's rows are byte-for-byte unchanged after org A
+ * attacks them. Any pg_cron job that writes a fixture row inside that window
+ * fails the assertion, and it fails it at random — which is worse than a red
+ * suite, because the next genuine red gets waved off as "the flake".
+ *
+ * Five jobs run against this project (`select * from cron.job`):
+ *
+ *   ot_rollups        every 5 min       app.refresh_reading_rollups()
+ *   ot_rollup_sweep   hourly at :37     app.backfill_reading_rollups(-30h, now)
+ *   ot_derive_events  1-59/5            app.derive_events_incremental()
+ *   ot_alert_rules    2-59/5            app.evaluate_alert_rules()
+ *   ot_retention      daily at 04:43    partitions + ingest ids older than 60d
+ *
+ * Measured on 2026-08-04 against the fixture world as it was, by holding a
+ * seeded world still for 90 seconds and running the four sub-daily commands by
+ * hand — FOUR tables moved, not one:
+ *
+ *   alerts          `ot_alert_rules` opened `trough_low:<device_id>` (the
+ *                   seeded reading of 812 mm is past the 700 mm uncalibrated
+ *                   threshold) AND stamped resolved_at on the seeded alert,
+ *                   whose dedup_key is not in the condition's key set.
+ *   devices         `app.propagate_device_last_seen` filled last_seen_at from
+ *                   the seeded reading and the touch trigger bumped updated_at.
+ *   readings_hourly the rollup recomputed the bucket from the one seeded
+ *                   reading: 6 samples / min 800 / max 830 → 1 / 812 / 812.
+ *   readings_daily  same, one level up.
+ *
+ * The rule that follows from it, and the reason for the seed values below:
+ *
+ *   A fixture row must state something no scheduled job wants to change.
+ *
+ * Not "assert less" — the isolation assertions are the product here and they
+ * stay exactly as strong. Not "turn the job off" either: the engine running IS
+ * production, and a suite that only passes with production switched off is
+ * testing nothing. Concretely:
+ *
+ *   1. alert_rules is seeded DISABLED. `app.evaluate_alert_rules` loops over
+ *      `alert_rules where enabled`, so a fixture farm with no enabled rule is
+ *      invisible to the engine — no open, no resolve. The suite tests tenant
+ *      isolation, not the alert engine; its fixtures have no business firing
+ *      conditions. The seeded `alerts` row is still written directly, so every
+ *      alerts probe stays non-vacuous.
+ *   2. The seeded reading is BELOW every trough_low threshold anyway
+ *      (SEEDED_DISTANCE_MM, defence in depth for the day somebody seeds an
+ *      enabled rule again).
+ *   3. readings_hourly / readings_daily are seeded as exactly what the rollups
+ *      derive from that one reading, so both rollup jobs upsert identical
+ *      values and the row does not change.
+ *   4. devices.last_seen_at and device_health.last_seen_at are seeded at the
+ *      reading's own timestamp. Both propagation writes are forward-only
+ *      (`... > last_seen_at`), so there is nothing to advance.
+ *
+ * `readings.received_at` deliberately stays at now(): the partition probes
+ * depend on the row landing in the current month's partition.
+ *
+ * `rls.test.ts` asserts all four of these as a standing invariant, so a future
+ * fixture edit that re-arms the race fails loudly instead of flaking.
  */
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { RLS_ENV } from './env';
+import { suiteFetch } from './transport';
 import { NON_CASCADING_TABLES, type FixtureIds, type MemberRole } from './tables';
 
 // Node ≥18 provides atob; packages/db carries no @types/node (see env.ts).
@@ -67,10 +130,21 @@ const PEN_POLYGON =
 
 const nowIso = (): string => new Date().toISOString();
 
-function hourBucketIso(): string {
-  const d = new Date();
-  d.setUTCMinutes(0, 0, 0);
-  return d.toISOString();
+/**
+ * The trough reading every seeded org carries, in mm of air between the sensor
+ * and the water. `app.alert_cond_trough_low` fires an uncalibrated trough at
+ * `value >= max_distance_mm` (700 by default) — bigger is emptier — so this is
+ * a comfortably full trough and the condition cannot fire on it. The fixture
+ * curve carries none of the keys `app.trough_percent_full` reads, so the
+ * percent-full branch is never taken and this is the only threshold in play.
+ */
+const SEEDED_DISTANCE_MM = 240;
+
+/** `date_trunc('hour', d)` as Postgres computes it on this cluster (TimeZone = UTC). */
+function hourBucketIso(d: Date): string {
+  const h = new Date(d.getTime());
+  h.setUTCMinutes(0, 0, 0);
+  return h.toISOString();
 }
 
 function lastHourRange(): string {
@@ -87,6 +161,11 @@ export function newRunId(): string {
 export function serviceClient(): Client {
   return createClient(RLS_ENV.url, RLS_ENV.serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    // Retries connection-level rejections only; every response that arrives is
+    // passed through untouched, whatever its status. See tests/transport.ts for
+    // why the line is exactly there. This is the client that makes the ~120
+    // sequential setup calls, so it is the one a cold hosted project drops.
+    global: { fetch: suiteFetch },
   });
 }
 
@@ -115,6 +194,13 @@ const idOf = (row: Row): string => String(row['id']);
 /** Seeds one complete tenant: every table in the inventory gets a row. */
 async function seedOrg(service: Client, runId: string, key: 'A' | 'B'): Promise<FixtureIds> {
   const tag = `${runId}-${key}`;
+
+  // One instant, and every telemetry row hangs off it. The rollups key on
+  // date_trunc of this timestamp and the last-seen propagation compares
+  // against it, so they have to agree to the millisecond or the "inert
+  // fixture" property above quietly stops holding.
+  const seededAt = new Date();
+  const seededAtIso = seededAt.toISOString();
 
   const org = await insertOne(service, 'orgs', {
     name: `RLS suite ${tag}`,
@@ -242,6 +328,9 @@ async function seedOrg(service: Client, runId: string, key: 'A' | 'B'): Promise<
     role: 'trough_level',
     mounted_on: penFeatureId,
     status: 'live',
+    // Already at the newest reading, so app.propagate_device_last_seen has
+    // nothing to advance (it writes only where l.last_heard_at > last_seen_at).
+    last_seen_at: seededAtIso,
   });
   const deviceId = idOf(device);
 
@@ -290,11 +379,17 @@ async function seedOrg(service: Client, runId: string, key: 'A' | 'B'): Promise<
     duration_s: 90,
   });
 
+  // DISABLED ON PURPOSE — see "the fixture world must be inert" at the top of
+  // this file. An enabled rule puts this farm into app.evaluate_alert_rules'
+  // loop, which then both opens a trough_low alert and resolves the seeded one
+  // below, mid-assertion, on the pg_cron tick. The row still exists, so every
+  // alert_rules probe still has something to attack.
   const rule = await insertOne(service, 'alert_rules', {
     org_id: orgId,
     farm_id: farmId,
     kind: 'trough_low',
     severity: 'warn',
+    enabled: false,
   });
 
   await insertOne(service, 'alerts', {
@@ -320,41 +415,49 @@ async function seedOrg(service: Client, runId: string, key: 'A' | 'B'): Promise<
     notes: `${tag} fixture`,
   });
 
+  // received_at stays at now(): the partition probes need this row in the
+  // current month's partition. The VALUE is what keeps it harmless.
   await insertOne(service, 'readings', {
     org_id: orgId,
     farm_id: farmId,
     device_id: deviceId,
     metric: 'distance_mm',
-    value: 812,
-    received_at: nowIso(),
+    value: SEEDED_DISTANCE_MM,
+    received_at: seededAtIso,
   });
 
+  // Exactly what app.refresh_reading_rollups / app.backfill_reading_rollups
+  // derive from the single reading above: one sample, so min = max = avg =
+  // sum = last = the reading. Both jobs upsert on (farm_id, device_id, metric,
+  // bucket_start) and would otherwise rewrite this row mid-assertion; writing
+  // the same values makes their upsert a genuine no-op.
   await insertOne(service, 'readings_hourly', {
     org_id: orgId,
     farm_id: farmId,
     device_id: deviceId,
     metric: 'distance_mm',
-    bucket_start: hourBucketIso(),
-    min: 800,
-    max: 830,
-    avg: 812,
-    sum: 4872,
-    last: 812,
-    sample_count: 6,
+    bucket_start: hourBucketIso(seededAt),
+    min: SEEDED_DISTANCE_MM,
+    max: SEEDED_DISTANCE_MM,
+    avg: SEEDED_DISTANCE_MM,
+    sum: SEEDED_DISTANCE_MM,
+    last: SEEDED_DISTANCE_MM,
+    sample_count: 1,
   });
 
+  // And the daily rollup of that one hourly bucket.
   await insertOne(service, 'readings_daily', {
     org_id: orgId,
     farm_id: farmId,
     device_id: deviceId,
     metric: 'distance_mm',
-    bucket_start: new Date().toISOString().slice(0, 10),
-    min: 780,
-    max: 860,
-    avg: 815,
-    sum: 117360,
-    last: 812,
-    sample_count: 144,
+    bucket_start: seededAtIso.slice(0, 10),
+    min: SEEDED_DISTANCE_MM,
+    max: SEEDED_DISTANCE_MM,
+    avg: SEEDED_DISTANCE_MM,
+    sum: SEEDED_DISTANCE_MM,
+    last: SEEDED_DISTANCE_MM,
+    sample_count: 1,
   });
 
   await insertOne(service, 'device_health', {
@@ -362,7 +465,8 @@ async function seedOrg(service: Client, runId: string, key: 'A' | 'B'): Promise<
     org_id: orgId,
     farm_id: farmId,
     online: true,
-    last_seen_at: nowIso(),
+    // Same instant as the reading — the propagation only moves this forward.
+    last_seen_at: seededAtIso,
     expected_interval_s: 3600,
   });
 
@@ -475,6 +579,7 @@ async function createActor(
   // access-token hook run and stamp org_id / member_role.
   const anon = createClient(RLS_ENV.url, RLS_ENV.anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: suiteFetch },
   });
   const signIn = await anon.auth.signInWithPassword({ email, password });
   if (signIn.error || !signIn.data.session) {
@@ -484,7 +589,7 @@ async function createActor(
 
   const client = createClient(RLS_ENV.url, RLS_ENV.anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { Authorization: `Bearer ${accessToken}` } },
+    global: { headers: { Authorization: `Bearer ${accessToken}` }, fetch: suiteFetch },
   });
 
   return {
@@ -528,6 +633,7 @@ async function createStaffActor(
 
   const anon = createClient(RLS_ENV.url, RLS_ENV.anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: suiteFetch },
   });
   const signIn = await anon.auth.signInWithPassword({ email, password });
   if (signIn.error || !signIn.data.session) {
@@ -542,7 +648,7 @@ async function createStaffActor(
     accessToken,
     client: createClient(RLS_ENV.url, RLS_ENV.anonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
-      global: { headers: { Authorization: `Bearer ${accessToken}` } },
+      global: { headers: { Authorization: `Bearer ${accessToken}` }, fetch: suiteFetch },
     }),
   };
 }

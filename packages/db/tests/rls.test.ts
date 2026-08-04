@@ -22,6 +22,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MISSING_ENV, RLS_ENV, announceEnv } from './env';
+import { transportSummary } from './transport';
 import {
   MEMBER_ROLES,
   STAFF_ONLY_TABLES,
@@ -366,6 +367,10 @@ describe.skipIf(!RLS_ENV.ready)(
 
     afterAll(async () => {
       if (world) await teardownWorld(world);
+      // Always printed, green or red. A run that needed retries is not a
+      // clean run in the way a run that needed none is, and the difference
+      // has to be visible without anyone re-deriving it from the network.
+      console.info(transportSummary());
     }, 180_000);
 
     const attacker = () => world.actors.ownerA.client;
@@ -419,6 +424,145 @@ describe.skipIf(!RLS_ENV.ready)(
         // A customer must never be handed staff powers by accident.
         expect(claims['platform_role']).toBeUndefined();
       });
+    });
+
+    // ── the fixture world is inert to pg_cron ───────────────────────────────
+    //
+    // Every probe below compares org B's rows before and after an attack and
+    // demands they be identical. That is only a statement about RLS if nothing
+    // ELSE writes them during the ~85 seconds the suite runs. Five jobs run on
+    // this project; four of them are sub-daily, and on 2026-08-04 the fixture
+    // world as it stood tripped all but one of them — the alert engine opened
+    // an alert and resolved the seeded one, the derivation filled in
+    // devices.last_seen_at, and both rollups rewrote the hourly and daily
+    // buckets. The suite went red at random, in the block that is supposed to
+    // prove tenant isolation.
+    //
+    // fixtures.ts now seeds rows those jobs do not want to change. These cases
+    // assert that property directly, so a future fixture edit that re-arms the
+    // race fails here — naming the cause — instead of flaking somewhere else.
+    describe('fixture world is inert to the scheduled jobs', () => {
+      const bothOrgs = () => [world.orgA.orgId, world.orgB.orgId];
+
+      it(
+        'seeds no ENABLED alert rule, so app.evaluate_alert_rules skips these farms',
+        async () => {
+          const { data, error } = await world.service
+            .from('alert_rules')
+            .select('id,org_id,kind,enabled')
+            .in('org_id', bothOrgs());
+          expect(error, `alert_rules read failed: ${error?.message}`).toBeNull();
+          expect(data?.length ?? 0, 'the alert_rules fixture vanished').toBeGreaterThan(0);
+          expect(
+            (data ?? []).filter((r) => (r as { enabled: boolean }).enabled),
+            'An enabled rule on a fixture farm puts it in the engine loop, which ' +
+              'opens alerts and resolves the seeded one on the 2-59/5 tick — ' +
+              'mid-assertion, at random. Seed it disabled; the row still exists, ' +
+              'so the alert_rules probes are unaffected.',
+          ).toEqual([]);
+        },
+        NET,
+      );
+
+      it(
+        'seeds a trough reading no alert condition would fire on',
+        async () => {
+          // app.alert_cond_trough_low, uncalibrated trough: fires at
+          // value >= max_distance_mm, default 700. Bigger is emptier.
+          const { data, error } = await world.service
+            .from('readings')
+            .select('org_id,metric,value')
+            .in('org_id', bothOrgs());
+          expect(error, `readings read failed: ${error?.message}`).toBeNull();
+          expect(data?.length ?? 0).toBeGreaterThan(0);
+          for (const r of (data ?? []) as { metric: string; value: number }[]) {
+            if (r.metric !== 'distance_mm') continue;
+            expect(
+              r.value,
+              `a seeded distance_mm reading of ${r.value} is past trough_low's ` +
+                `700 mm uncalibrated threshold. The suite tests tenant isolation, ` +
+                `not the alert engine — its fixtures must not trip live conditions.`,
+            ).toBeLessThan(700);
+          }
+        },
+        NET,
+      );
+
+      it(
+        'seeds rollup rows the rollup jobs would write unchanged',
+        async () => {
+          // app.refresh_reading_rollups (*/5) and app.backfill_reading_rollups
+          // (:37) both upsert on (farm_id, device_id, metric, bucket_start).
+          // One reading in the bucket means one sample and a flat aggregate; if
+          // the seeded row says anything else, the next tick rewrites it.
+          for (const table of ['readings_hourly', 'readings_daily']) {
+            const { data, error } = await world.service
+              .from(table)
+              .select('org_id,min,max,avg,sum,last,sample_count')
+              .in('org_id', bothOrgs());
+            expect(error, `${table} read failed: ${error?.message}`).toBeNull();
+            expect(data?.length ?? 0, `${table}: fixture missing`).toBeGreaterThan(0);
+            for (const row of (data ?? []) as Record<string, number>[]) {
+              const why =
+                `${table}: seeded as ${row['sample_count']} samples ` +
+                `(min ${row['min']} / max ${row['max']} / sum ${row['sum']}), but the ` +
+                `fixture writes exactly one reading into this bucket. The rollup will ` +
+                `recompute it to a flat single-sample row on its next tick and the ` +
+                `cross-tenant snapshot comparisons will fail at random.`;
+              expect(row['sample_count'], why).toBe(1);
+              for (const col of ['min', 'max', 'avg', 'sum']) {
+                expect(row[col], why).toBe(row['last']);
+              }
+            }
+          }
+        },
+        NET,
+      );
+
+      it(
+        'seeds last_seen_at at the reading, so the derivation has nothing to advance',
+        async () => {
+          // app.propagate_device_last_seen (inside ot_derive_events, 1-59/5) is
+          // forward-only: it writes only where the newest reading is LATER than
+          // the stored last_seen_at. Equal is a no-op; null is an update, and
+          // an update to `devices` also fires the touch trigger on updated_at.
+          for (const ids of [world.orgA, world.orgB]) {
+            const newest = await world.service
+              .from('readings')
+              .select('received_at')
+              .eq('device_id', ids.deviceId)
+              .order('received_at', { ascending: false })
+              .limit(1);
+            expect(newest.error).toBeNull();
+            const at = Date.parse(String((newest.data ?? [])[0]?.['received_at']));
+            expect(Number.isNaN(at), 'no reading seeded for the fixture device').toBe(false);
+
+            const dev = await world.service
+              .from('devices')
+              .select('last_seen_at')
+              .eq('id', ids.deviceId)
+              .single();
+            expect(dev.error).toBeNull();
+            expect(
+              Date.parse(String(dev.data?.['last_seen_at'])),
+              'devices.last_seen_at is behind the seeded reading — ot_derive_events ' +
+                'will move it, and bump updated_at with it, mid-assertion',
+            ).toBeGreaterThanOrEqual(at);
+
+            const health = await world.service
+              .from('device_health')
+              .select('last_seen_at')
+              .eq('device_id', ids.deviceId)
+              .single();
+            expect(health.error).toBeNull();
+            expect(
+              Date.parse(String(health.data?.['last_seen_at'])),
+              'device_health.last_seen_at is behind the seeded reading',
+            ).toBeGreaterThanOrEqual(at);
+          }
+        },
+        NET,
+      );
     });
 
     // ── the matrix: org A owner vs every tenant table of org B ──────────────

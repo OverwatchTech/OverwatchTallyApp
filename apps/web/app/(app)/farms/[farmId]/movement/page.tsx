@@ -227,7 +227,10 @@ export default async function MovementPage({ params }: { params: Promise<{ farmI
             title="Gate state"
             sub="last swing recorded"
             padded={false}
-            note="This is the last swing each gate reported inside the window, not a live poll — a missed uplink leaves it stale."
+            // "uplink" is on the banned list (CLAUDE.md #5) and this string is
+            // rendered, not a comment — a plain viewer reads it. Same fact,
+            // said the way a rancher would say it.
+            note="This is the last swing each gate reported inside the window, not a live check — if a gate has not reported since, this is out of date."
           >
             {gateState.length > 0 ? (
               gateState.map((g) => (

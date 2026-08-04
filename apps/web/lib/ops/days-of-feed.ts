@@ -13,10 +13,10 @@
 //
 //   1. Different arithmetic. `lib/ops/feed.ts` divided raw as-fed kilograms by
 //      a raw rate. `lib/dashboard/overview.ts` did the same and floored it.
-//      Neither converted as-fed to dry matter and neither allowed for waste, so
-//      both read optimistic by weeks. Both are deleted; every surface now calls
-//      `daysOfFeedOnHand` in packages/forecast, which applies BOTH multipliers
-//      before the division and refuses to run without them.
+//      Neither converted as-fed to dry matter, so both read optimistic by
+//      weeks. Both are deleted; every surface now calls `daysOfFeedOnHand` in
+//      packages/forecast, which converts to dry matter before the division and
+//      refuses to run without the percentage.
 //   2. Different rate windows — 7, 7, 21. All three now read
 //      `RATE_WINDOW_DAYS` from packages/forecast.
 //   3. Different waste factors — none, none, a hardcoded screen default, and
@@ -39,6 +39,21 @@
 // A settings value must never quietly replace a disclosed default while the
 // screen goes on claiming nobody chose it. That is the whole reason the
 // forecast screen is worth reading.
+//
+// ===========================================================================
+// AND THE SAME RULE APPLIES TO WHAT THE FACTOR IS FOR
+// ===========================================================================
+// The waste factor used to divide this runway, and it was wrong to: the
+// demand it divides into is DISPENSED mass out of `feed_events`, which
+// already contains the wasted feed. See the basis diagram at the top of
+// `packages/forecast/src/days-of-feed.ts`. `computeDaysOfFeed` now passes
+// `demandBasis: 'dispensed'` and the stack is no longer discounted.
+//
+// The disclosure did NOT get quietly deleted along with the coefficient.
+// `wasteFactorAssumption` still shows the factor, still says who set it and
+// when, and now also says in words that it does not shorten the days and why.
+// A disclosure that disappears is indistinguishable from a screen that stopped
+// telling the truth.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '@overwatch/db';
@@ -160,23 +175,50 @@ const METHOD_WORDS: Record<string, string> = {
 };
 
 /**
+ * What the waste factor is doing to the number the reader is looking at.
+ *
+ * Under the `dispensed` basis every surface uses, it is doing nothing to the
+ * runway — the measured rate already carries the wasted feed — and the
+ * disclosure has to say that in words. Dropping the waste line instead would
+ * be worse than leaving it wrong: the reader would have no way to tell whether
+ * the factor stopped applying or the screen stopped mentioning it.
+ */
+function wasteRoleSentence(appliedToRunway: boolean): string {
+  return appliedToRunway
+    ? 'Taken off the stack before the division, because the demand it is divided by is a book intake target.'
+    : 'This does NOT shorten the days shown. The feeding rate is measured as feed dispensed to the bunk, ' +
+        'and dispensed feed already includes what gets wasted, so taking it off the stack as well would count it twice. ' +
+        'It is shown because it still says how much of what leaves the stack actually gets eaten.';
+}
+
+/**
  * The one line the reader sees about waste. `source` flips with the resolution,
  * because "you set this" and "we assumed this" are different claims and the
  * disclosure component renders them differently on purpose.
+ *
+ * `appliedToRunway` comes off the result (`DaysOfFeedResult.wasteAppliedToRunway`),
+ * never from a literal here — the disclosure and the arithmetic must be unable
+ * to disagree, which is the whole failure this file exists to prevent.
  */
 export function wasteFactorAssumption(
   waste: ResolvedWasteFactor,
   timezone: string,
+  appliedToRunway: boolean,
 ): Assumption {
+  const role = wasteRoleSentence(appliedToRunway);
+
   if (waste.scope === 'default') {
     return {
       key: 'waste_factor_default',
-      label: 'Feed lost between the stack and the animal',
+      label: appliedToRunway
+        ? 'Feed lost between the bunk and the animal'
+        : 'Feed lost between the bunk and the animal (reported, not deducted)',
       value: waste.wasteFactor,
       source: 'default',
       detail:
         'Midpoint of the published ground-feeding range (0.20–0.40). Nobody on this farm set it. ' +
-        'Ring feeders run 0.05–0.10 — if that is how this operation feeds, this figure is far too high.',
+        'Ring feeders run 0.05–0.10 — if that is how this operation feeds, this figure is far too high. ' +
+        role,
     };
   }
 
@@ -187,15 +229,17 @@ export function wasteFactorAssumption(
   return {
     key: 'waste_factor_set',
     label:
-      waste.scope === 'pen'
-        ? 'Feed lost between the stack and the animal, set for this pen'
-        : 'Feed lost between the stack and the animal',
+      (waste.scope === 'pen'
+        ? 'Feed lost between the bunk and the animal, set for this pen'
+        : 'Feed lost between the bunk and the animal') +
+      (appliedToRunway ? '' : ' (reported, not deducted)'),
     value: waste.wasteFactor,
     source: 'caller',
     detail:
       `Set by ${who}${when === null ? '' : ` on ${when}`}.` +
       (method === undefined ? '' : ` Recorded as ${method}.`) +
-      (waste.scope === 'pen' ? ' This pen overrides the farm-wide figure.' : ''),
+      (waste.scope === 'pen' ? ' This pen overrides the farm-wide figure.' : '') +
+      ` ${role}`,
   };
 }
 
@@ -217,7 +261,11 @@ export function daysOfFeedAssumptions(
 ): Assumption[] {
   return [
     ...result.assumptions.filter((a) => a.key !== 'waste_factor'),
-    wasteFactorAssumption(waste, timezone),
+    // The package's `demand_basis` line survives the filter on purpose: it is
+    // the sentence that tells the reader whether the waste line below it
+    // changes the answer, and the flag is read off the result rather than
+    // restated here so the two can never drift apart.
+    wasteFactorAssumption(waste, timezone, result.wasteAppliedToRunway),
   ];
 }
 
@@ -335,6 +383,25 @@ export function computeDaysOfFeed(input: DaysOfFeedComputeInput): FarmDaysOfFeed
     baleWeightSource: stack?.baleWeightSource ?? 'nominal',
     dryMatterPct: stack?.dryMatterPct ?? Number.NaN,
     wasteFactor: input.waste.wasteFactor,
+    // ─────────────────────────────────────────────────────────────────
+    // THE BASIS. Read this before touching the line above it.
+    // ─────────────────────────────────────────────────────────────────
+    // `measuredRate` sums `feed_events.amount_kg`: mass weighed on its way
+    // OUT of the stack and into the bunk. That number already contains the
+    // hay that then gets trampled, bedded on, and rained on — waste happens
+    // after the feed leaves the stack, not before it is measured.
+    //
+    // So the stack must NOT be discounted by the waste factor here. It was,
+    // and the runway came out short by exactly 1 ÷ (1 − waste): 37.5 days
+    // shown against 53.5 actual on this farm's own stack, on every surface
+    // at once, because all four call this function.
+    //
+    // The waste factor is still resolved, still passed, and still disclosed
+    // — it sizes the loss, and `wasteDryMatterKg` reports it. It just does
+    // not divide the runway. It WOULD if this demand were a ration sheet
+    // instead of a scale reading; that is what `book_intake` is for, and
+    // nothing in apps/web uses it today.
+    demandBasis: 'dispensed',
   } as const;
 
   const raw = daysOfFeedOnHand({

@@ -1,11 +1,12 @@
 # Turning on text messages and email
 
-`supabase/functions/alert-dispatch` is written, type-checks, and is ready to
-deploy. It is **not deployed**, and it holds **no provider credentials**. This
-document is the list of things only the owner can supply.
+**SMS is one step away, and that step is §4. Nothing is invoking the
+dispatcher.**
 
-Everything in the database is already done. Verified against the live project
-(`lropxenygvybctvaspxm`) on 2026-08-03:
+Much of this document was written when nothing was set up. Since then the
+function was deployed and Twilio was connected, so §1 and §3 are largely done
+and are kept for reference. Re-verified against the live project
+(`lropxenygvybctvaspxm`) on **2026-08-04**:
 
 | Piece | State |
 |---|---|
@@ -14,20 +15,46 @@ Everything in the database is already done. Verified against the live project
 | `public.alert_dispatch_record(uuid, jsonb)` | present, `alert_dispatcher` has EXECUTE |
 | `alert_dispatcher` role, granted to `authenticator` | present |
 | `ot_alert_rules` cron job (opens alerts every 5 min) | **active** |
-| `alert-dispatch` edge function | **not deployed** |
-| Twilio / Resend credentials | **not supplied** |
-| Scheduler that invokes the function | **does not exist** |
-| `pg_net` extension | **not installed** — see §4 |
+| `alert-dispatch` edge function | **deployed** — v9, ACTIVE, `verify_jwt` on |
+| `ALERT_DISPATCH_JWT` / `ALERT_DISPATCH_TOKEN` | **set** — probe reports `db: ready` |
+| Twilio credentials | **set, and Twilio accepts them** (account fetch → 200) |
+| `RESEND_API_KEY` | **not supplied** — every email records `unconfigured` |
+| Scheduler that invokes the function | **DOES NOT EXIST** ← the only blocker for SMS |
+| `pg_net` extension | **installed** (0.20.3) — the §4 recommendation is now available |
+
+Check any of that yourself, without sending a message or spending anything:
+
+```
+GET https://<ref>.functions.supabase.co/alert-dispatch?check=rails
+```
+
+It asks Twilio and Resend whether the keys work, and PostgREST whether the
+dispatcher's token still opens the queue. It answers ready / rejected /
+not_configured plus an HTTP status — never a secret, not even a prefix.
 
 **In-app alerting already works and is unaffected by all of this.** The rules
 engine writes the alert row and stamps its own `in_app` receipt in the same
 INSERT; `/alerts` reads it directly. No credentials are involved. What is
 missing is only the part that reaches somebody who is not looking at a screen.
 
-Until the steps below are done, the UI says so. `/settings/notifications`
-reads the delivery log and reports "Not sending yet" for any rail with no
-`sent` receipt in it, and every open alert's "Who was told" panel says in
-words that no text message is recorded. Nothing fakes a receipt.
+**Right now no text can go out for any alert** — including `ingest_stalled`,
+the one that fires when we have stopped hearing from the ranch altogether. The
+function is deployed and Twilio works, but nothing calls it, so it has not run
+since a dispatch fired by hand at 00:49–01:22 on 2026-08-04.
+
+Until §4 is done the UI says so, and says it from live facts rather than from
+those three receipts. `/settings/notifications` asks two questions on every
+load — do the providers accept our credentials (the probe above), and is
+anything invoking the dispatcher (`public.alert_delivery_is_scheduled()`,
+migration 0027) — and today renders **"Text messages are set up but nothing is
+sending them yet."**
+
+It said **"Sending"** until 2026-08-04, on the strength of those three demo
+receipts alone. That was the defect migration 0027 exists to end: a receipt
+proves a message went out once, and says nothing about whether the next one
+will. Every open alert's "Who was told" panel still says in words that no text
+message is recorded. Nothing fakes a receipt, and nothing infers a capability
+from one.
 
 ---
 
@@ -146,35 +173,47 @@ Never paste these into a chat, a commit, or a log.
 
 ## 4. Deploying and scheduling
 
-**Deploy.** The function imports nothing outside its own directory, so unlike
+**Deploy — DONE.** Already deployed: v9, ACTIVE, `verify_jwt` **on**. Kept for
+reference; the function imports nothing outside its own directory, so unlike
 `mdp-webhook` it needs no bundling step:
 
 ```
 supabase functions deploy alert-dispatch
 ```
 
-*Owner decision: `verify_jwt` on or off.* `mdp-webhook` is deployed with it
-off, because MDP cannot send a JWT. This function can be called with one, so
-leaving `verify_jwt` **on** adds a layer in front of the token check. The cost
-is that the `GET` health-check path returns 401 instead of the 200 the code
-answers. Recommendation: leave it on and have the scheduler send both the anon
-key and `x-alert-dispatch-token`.
+*Owner decision, already taken: `verify_jwt` is on.* `mdp-webhook` is deployed
+with it off, because MDP cannot send a JWT. This function can be called with
+one, so `verify_jwt` **on** adds a layer in front of the token check. The cost
+is that the `GET` health-check path needs the anon key. The scheduler must
+therefore send both the anon key and `x-alert-dispatch-token`.
 
-**Schedule.** Every 1–5 minutes. Escalation waits are measured from
-`opened_at`, so a five-minute scheduler means a "call group 2 after 15 minutes"
-setting fires somewhere in 15–20 minutes. Say five minutes to a customer, not
-fifteen.
+**Schedule — THIS IS THE OPEN STEP, AND THE ONLY ONE BLOCKING SMS.** Every 1–5
+minutes. Escalation waits are measured from `opened_at`, so a five-minute
+scheduler means a "call group 2 after 15 minutes" setting fires somewhere in
+15–20 minutes. Say five minutes to a customer, not fifteen.
 
-*Owner decision: which scheduler.* **`pg_net` is not installed on this
-project**, so pg_cron cannot make an HTTPS call today. Three ways forward:
+*Owner decision: which scheduler.* `pg_net` **is now installed** (0.20.3), so
+pg_cron can make the HTTPS call and the first option below — the recommended
+one — is available today. Three ways forward:
 
-- **Enable `pg_net`** and schedule from the database next to the other
-  `ot_*` jobs. Needs a migration — the SQL is at the end of this document.
-  This keeps everything in one place and is the recommendation.
-- **Supabase Scheduled Functions** in the dashboard. No migration, but the
-  schedule then lives somewhere the repository does not describe.
+- **Schedule from the database**, next to the other `ot_*` jobs, using
+  `pg_net`. The exact `cron.schedule` call is in the OWED block at the foot
+  of `packages/db/migrations/0027_alert_delivery_readiness.sql`. Run it from
+  the SQL editor, **not** inside a migration — `cron.schedule` in a
+  transaction takes the backend down. This keeps everything in one place and
+  is the recommendation.
+- **Supabase Scheduled Functions** in the dashboard. No SQL, but the schedule
+  then lives somewhere the repository does not describe.
 - **An external scheduler** (GitHub Actions cron, Modal, a cron box). Adds a
   second thing that can be down.
+
+**If you pick either of the last two, tell us.** `/settings/notifications`
+derives "is anything sending" from `public.alert_delivery_is_scheduled()`,
+which reads this database's own schedule and nothing else. An external
+scheduler would leave that returning false, and the screen would keep saying
+"Set up, not sending" while texts were in fact going out — understating rather
+than overstating, but still wrong. The fix is one more clause in that function
+(migration 0027 says where). The database schedule needs no such follow-up.
 
 ```
 POST https://<project>.functions.supabase.co/alert-dispatch

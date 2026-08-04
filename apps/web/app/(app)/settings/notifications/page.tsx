@@ -13,9 +13,12 @@
 //     `channel = 'in_app'`. Everyone who can sign in already sees every
 //     alert. A tick-box that cannot be unticked is a lie about control.
 //
-//  2. Say a text message is on when no text message has ever gone out.
-//     `alert-dispatch` is written and unconfigured (docs/ALERT-DISPATCH.md).
-//     The rail cards below read the delivery log and report what it says.
+//  2. Say a text message is on because one once went out. `alert-dispatch`
+//     is deployed and Twilio accepts our credentials, but nothing is invoking
+//     it, so nothing sends. The rail cards below derive their state from what
+//     is true right now — credentials, invocation, and whether anybody is
+//     saved on that channel — and a receipt from last night gets no vote.
+//     `lib/alerts/readiness.ts` is where those questions get asked.
 //
 //  3. Let "quiet hours" read as "no alerts". It is stated at the top of the
 //     page, again inside every rule's form, and it is the same sentence
@@ -34,17 +37,19 @@ import { claimsFromSession, isManagerOrOwner } from '@/lib/auth/claims';
 import { fetchRecipients, toContacts, type Contact } from '@/lib/alerts/recipients';
 import { fetchRules, type RuleRow } from '@/lib/alerts/rules-db';
 import { railStates, channelLabel } from '@/lib/alerts/delivery';
+import { fetchDeliveryReadiness } from '@/lib/alerts/readiness';
 import { receiptsOf } from '@/lib/alerts/queries';
 import {
-  KIND_COPY,
-  RULE_KINDS,
   escalationLabel,
+  kindEnabledNote,
+  kindLabel,
+  kindWatches,
   parseEscalation,
   parseQuietHours,
   quietHoursLabel,
   ruleSettings,
+  visibleRules,
 } from '@/lib/alerts/rules';
-import type { AlertKind } from '@/lib/alerts/kinds';
 
 import { AddContact, type ContactDraft, type FarmOption } from './contact-form';
 import { ContactRow } from './contact-row';
@@ -78,6 +83,10 @@ function ruleDraft(rule: RuleRow): RuleDeliveryDraft {
     silenced: quiet?.severities ?? ['info', 'warn'],
     secondAfter: tiers[1]?.afterMinutes ?? 0,
     thirdAfter: tiers[2]?.afterMinutes ?? 0,
+    // Unticking "Watch for this" on the whole-place outage alert also decides
+    // whether the per-sensor alerts stand down for it (migration 0026). A
+    // control that reaches into another alert says so on the screen.
+    enabledNote: kindEnabledNote(rule.kind),
   };
 }
 
@@ -100,16 +109,31 @@ export default async function NotificationsPage() {
   const farmName = new Map(farms.map((f) => [f.id, f.name]));
   const contacts = toContacts(recipients);
 
-  // Delivery evidence, read from the record rather than from a flag. Two
-  // hundred alerts is enough to answer "has a text message ever gone out
-  // from this account" without turning the settings page into a report.
-  const { data: recentAlerts } = await supabase
-    .from('alerts')
-    .select('deliveries')
-    .order('opened_at', { ascending: false })
-    .limit(200);
+  // CAN A TEXT GO OUT RIGHT NOW? Asked, not remembered.
+  //
+  // This screen used to answer that by scanning the delivery log for any
+  // receipt saying `sent`, and it found three — written by a dispatch run
+  // fired by hand during a demo — and told the rancher text messages were
+  // going out. Nothing had invoked the dispatcher since, so no text could
+  // have gone out for any alert, including the one that fires when we stop
+  // hearing from the ranch entirely.
+  //
+  // `fetchDeliveryReadiness` asks the two live questions the browser cannot
+  // see for itself: whether the providers accept our credentials, and whether
+  // anything is invoking the dispatcher (migration 0027 — one boolean, over
+  // a `cron.job` no tenant may read). It never throws.
+  //
+  // The delivery log is still read, but only for what history can honestly
+  // say: whether a recent attempt failed, and — if the live probe could not
+  // get an answer — whether credentials existed the last time anything tried.
+  // Two hundred alerts is plenty for that without turning settings into a
+  // report.
+  const [{ data: recentAlerts }, readiness] = await Promise.all([
+    supabase.from('alerts').select('deliveries').order('opened_at', { ascending: false }).limit(200),
+    fetchDeliveryReadiness(supabase),
+  ]);
   const receiptsByAlert = (recentAlerts ?? []).map((a) => receiptsOf(a));
-  const rails = railStates(contacts, receiptsByAlert);
+  const rails = railStates(contacts, receiptsByAlert, readiness);
 
   // How many groups the chain has room for: the deepest wait any rule sets,
   // never fewer than two, so "who gets it if nobody answers" is always
@@ -222,11 +246,17 @@ export default async function NotificationsPage() {
 
       {/* ── Per-rule quiet hours and chain ───────────────────── */}
       {farms.map((farm) => {
-        const farmRules = rulesByFarm.get(farm.id) ?? [];
-        const ordered = [...farmRules].sort(
-          (a, b) =>
-            RULE_KINDS.indexOf(a.kind as AlertKind) - RULE_KINDS.indexOf(b.kind as AlertKind),
-        );
+        // `visibleRules` does two things this page was getting wrong: it drops
+        // rules that watch our pipeline rather than this ranch unless the rule
+        // says `customer_visible`, and it sorts unlisted kinds LAST instead of
+        // first. Before it, `ingest_stalled` led this list, spelled exactly
+        // like that, with nothing under it.
+        const allRules = rulesByFarm.get(farm.id) ?? [];
+        const ordered = visibleRules(allRules);
+        // "Nothing is being watched" must mean nothing is being watched, not
+        // "everything watching this farm is ours". The orange in the empty
+        // branch below says something is wrong, and that would be a lie.
+        const noneAtAll = allRules.length === 0;
 
         return (
           <Card
@@ -234,19 +264,28 @@ export default async function NotificationsPage() {
             title={`When we call about ${farm.name}`}
             sub={
               <span className="ow-machine">
-                {ordered.length === 0
+                {noneAtAll
                   ? 'Nothing is being watched here yet'
-                  : `${ordered.filter((r) => r.enabled).length} of ${ordered.length} watched`}
+                  : ordered.length === 0
+                    ? 'Nothing here is yours to set'
+                    : `${ordered.filter((r) => r.enabled).length} of ${ordered.length} watched`}
               </span>
             }
             padded={false}
           >
             {ordered.length === 0 ? (
               <div className="ow-listitem">
-                <p className="ow-body ow-wrong">
-                  Nothing on {farm.name} is being watched, so nothing will ever open an alert.
-                </p>
-                {canEdit && (
+                {noneAtAll ? (
+                  <p className="ow-body ow-wrong">
+                    Nothing on {farm.name} is being watched, so nothing will ever open an alert.
+                  </p>
+                ) : (
+                  <p className="ow-body">
+                    Everything watching {farm.name} right now is watched by us rather than set by
+                    you. Nothing on this list is yours to change yet.
+                  </p>
+                )}
+                {canEdit && noneAtAll && (
                   <div style={{ marginTop: '11px' }}>
                     <SeedRulesForm farmId={farm.id} farmName={farm.name} />
                   </div>
@@ -255,7 +294,6 @@ export default async function NotificationsPage() {
             ) : (
               <ul>
                 {ordered.map((rule) => {
-                  const copy = KIND_COPY[rule.kind as AlertKind];
                   const quiet = parseQuietHours(rule.quiet_hours);
                   const chain = parseEscalation(rule.escalation);
                   const settings = ruleSettings(rule.kind, rule.params);
@@ -264,8 +302,11 @@ export default async function NotificationsPage() {
                     <li key={rule.id} className="ow-listitem">
                       <div className="ow-inline" style={{ alignItems: 'flex-start' }}>
                         <div style={{ minWidth: 0, flex: '1 1 18rem' }}>
+                          {/* Never `rule.kind`. A database enum on a customer
+                              screen is CLAUDE.md #5 and #11 in one line, and
+                              this is where it happened. */}
                           <p className="ow-body">
-                            <b>{copy?.label ?? rule.kind}</b>
+                            <b>{kindLabel(rule.kind)}</b>
                             {!rule.enabled && (
                               <>
                                 {' '}
@@ -273,7 +314,7 @@ export default async function NotificationsPage() {
                               </>
                             )}
                           </p>
-                          <p className="ow-quiet">{copy?.watches}</p>
+                          <p className="ow-quiet">{kindWatches(rule.kind)}</p>
                           <p className="ow-quiet ow-machine">
                             {quietHoursLabel(quiet)} · {escalationLabel(chain)}
                           </p>

@@ -537,18 +537,53 @@ export default async function ForecastPage({
                   },
                   { label: 'Weight on hand, as fed', value: stack === null ? null : formatMeasure(stack.asFedKg, 'kg_ton') },
                   { label: 'Dry matter', value: stack === null ? null : `${stack.dryMatterPct.toFixed(1)}%` },
+                  // The waste row is NOT "waste allowed for" any more, because
+                  // it is no longer allowed for in this number — the feeding
+                  // rate below is dispensed mass and already carries it. The
+                  // row stays, with the factor, its provenance, and what it
+                  // actually does, because silently dropping a disclosure is
+                  // worse than a wrong one: the reader cannot tell the
+                  // difference between "it stopped applying" and "we stopped
+                  // saying". The `Why` block beside this table carries the
+                  // full sentence.
                   {
-                    label: 'Waste allowed for',
+                    label: leading.wasteAppliedToRunway
+                      ? 'Waste taken off the stack'
+                      : 'Waste in the feeding rate',
                     value:
                       `${(waste.wasteFactor * 100).toFixed(0)}% · ` +
                       (waste.scope === 'default'
                         ? 'nobody here chose this'
                         : waste.scope === 'pen'
                           ? 'set for this pen'
-                          : 'set for this farm'),
+                          : 'set for this farm') +
+                      (leading.wasteAppliedToRunway
+                        ? ' · taken off the stack'
+                        : ' · already in the measured rate, not taken off the stack again'),
                   },
                   { label: 'Feeding rate averaged over', value: `${RATE_WINDOW_DAYS} days` },
-                  { label: 'Dry matter that reaches an animal', value: leading.feedableDryMatterKg === null ? null : formatMeasure(leading.feedableDryMatterKg, 'kg_ton') },
+                  // The numerator that was actually divided. Under the
+                  // dispensed basis this is the whole dry-matter stack; the
+                  // wasted share is the line under it, sized but not deducted.
+                  {
+                    label: 'Stack divided by the rate, dry matter',
+                    value:
+                      leading.runwayDryMatterKg === null
+                        ? null
+                        : formatMeasure(leading.runwayDryMatterKg, 'kg_ton'),
+                  },
+                  {
+                    label: leading.wasteAppliedToRunway
+                      ? 'Dry matter that reaches an animal'
+                      : 'Of that, the share expected to be wasted',
+                    value: leading.wasteAppliedToRunway
+                      ? leading.feedableDryMatterKg === null
+                        ? null
+                        : formatMeasure(leading.feedableDryMatterKg, 'kg_ton')
+                      : leading.wasteDryMatterKg === null
+                        ? null
+                        : formatMeasure(leading.wasteDryMatterKg, 'kg_ton'),
+                  },
                   { label: 'Feeding rate, as fed', value: lbPerDay(rate.kgPerDay) },
                   { label: 'Feeding rate, dry matter', value: Number.isFinite(toDm(rate.kgPerDay)) ? lbPerDay(toDm(rate.kgPerDay)) : null },
                   { label: 'Days of feeding counted', value: String(rate.daysCounted) },

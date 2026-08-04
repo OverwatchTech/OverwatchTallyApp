@@ -34,12 +34,18 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { suiteFetch } from './transport';
 
-/** The `fetch` the probes use. packages/db compiles with lib ES2023 (no DOM). */
-declare function fetch(
-  input: string,
-  init?: { method?: string; headers?: Record<string, string> },
-): Promise<{ status: number; text(): Promise<string> }>;
+/**
+ * The `fetch` the probes use. This is the suite's second transport surface —
+ * `probePartitionAsMember` calls PostgREST directly rather than through
+ * supabase-js — so it goes through the same retry wrapper as every client, and
+ * under the same rule: connection-level rejections are retried, and every
+ * response that arrives is returned untouched. That matters more here than
+ * anywhere: this probe's verdict IS a status code (404/PGRST205 vs 200 with
+ * rows), and retrying a delivered status would be retrying the assertion.
+ */
+const fetch = suiteFetch;
 
 export const AUDIT_RPC = 'partition_rls_audit';
 

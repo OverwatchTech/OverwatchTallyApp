@@ -85,17 +85,24 @@ describe('the whole chain: readings → rate → weather → days → order date
     baleWeightSource: 'calibrated',
     dryMatterPct,
     wasteFactor: 0.3,
+    // The rate above is a DRAWDOWN of the stack — mass leaving it, the same
+    // thing `feed_events` weighs — so it already carries the waste and the
+    // stack is not discounted again. See the basis diagram in days-of-feed.ts.
+    demandBasis: 'dispensed',
     dmDemandKgPerDay: adjusted,
     // A 5 % operating band around the adjusted demand.
     dmDemandLowKgPerDay: adjusted * 0.95,
     dmDemandHighKgPerDay: adjusted * 1.05,
   });
 
-  it('turns the stack into days, dry matter and waste taken off first', () => {
+  it('turns the stack into days on the dry-matter stack, waste sized but not deducted', () => {
+    expect(days.dryMatterKg).toBeCloseTo(43_500, 6);
+    expect(days.runwayDryMatterKg).toBeCloseTo(43_500, 6);
     expect(days.feedableDryMatterKg).toBeCloseTo(30_450, 6);
-    expect(days.days).toBeCloseTo(9.143, 2);
-    expect(days.daysLow).toBeCloseTo(8.708, 2);
-    expect(days.daysHigh).toBeCloseTo(9.624, 2);
+    expect(days.wasteAppliedToRunway).toBe(false);
+    expect(days.days).toBeCloseTo(13.062, 2);
+    expect(days.daysLow).toBeCloseTo(12.44, 2);
+    expect(days.daysHigh).toBeCloseTo(13.749, 2);
     expect(days.confidence).toBe('high');
   });
 
@@ -107,7 +114,7 @@ describe('the whole chain: readings → rate → weather → days → order date
   });
 
   it('lands on an order date with the whole band still attached', () => {
-    expect(order.orderInDays).toBeCloseTo(5.143, 2);
+    expect(order.orderInDays).toBeCloseTo(9.062, 2);
     expect(order.overdue).toBe(false);
     expect(order.orderByEarliest ?? 0).toBeLessThan(order.orderBy ?? 0);
     expect(order.orderByLatest ?? 0).toBeGreaterThan(order.orderBy ?? 0);
@@ -120,6 +127,7 @@ describe('the whole chain: readings → rate → weather → days → order date
     expect(keys(rate.assumptions)).toContain('estimator');
     expect(keys(weather.assumptions)).toContain('weather_curve');
     expect(keys(days.assumptions)).toContain('dry_matter_conversion');
+    expect(keys(days.assumptions)).toContain('demand_basis');
     expect(keys(days.assumptions)).toContain('waste_factor');
     expect(keys(order.assumptions)).toContain('inherited_confidence');
 
@@ -148,6 +156,7 @@ describe('the whole chain: readings → rate → weather → days → order date
       baleWeightSource: 'nominal',
       dryMatterPct,
       wasteFactor: 0.3,
+      demandBasis: 'dispensed',
       dmDemandKgPerDay: adjusted,
     });
     expect(weak.confidence).toBe('low');
@@ -164,6 +173,7 @@ describe('the whole chain: readings → rate → weather → days → order date
       baleWeightSource: 'calibrated',
       dryMatterPct,
       wasteFactor: 0.3,
+      demandBasis: 'dispensed',
       dmDemandKgPerDay: nothing.ratePerDay ?? Number.NaN,
     });
     expect(noDays.confidence).toBe('none');

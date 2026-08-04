@@ -243,16 +243,27 @@ export default async function FarmPage({ params }: { params: Promise<{ farmId: s
                   .
                 </>
               ) : null}{' '}
+              {/* "allowed for" was true when waste divided the runway. Under
+                  the dispensed basis (0024) it does not: the rate is measured
+                  as mass leaving the stack, so the trampled share is already
+                  inside it and taking it off again counted it twice. The
+                  factor is still real and still disclosed — it sizes the loss —
+                  it just no longer shortens this number. Saying "allowed for"
+                  here would be the screen claiming a deduction it stopped
+                  making, which is the failure this whole basis fix was about. */}
               {daysOfFeed.waste.scope === 'default' ? (
                 <>
-                  Waste between the stack and the animal is allowed for at{' '}
+                  Waste between the stack and the animal runs at{' '}
                   <b>{Math.round(daysOfFeed.waste.wasteFactor * 100)}%</b> — the published
-                  ground-feeding midpoint, which nobody on this farm has set.
+                  ground-feeding midpoint, which nobody on this farm has set. It is already
+                  inside the measured rate, so it is not taken off the stack again.
                 </>
               ) : (
                 <>
-                  Waste between the stack and the animal is allowed for at{' '}
+                  Waste between the stack and the animal runs at{' '}
                   <b>{Math.round(daysOfFeed.waste.wasteFactor * 100)}%</b>, set for this farm.
+                  It is already inside the measured rate, so it is not taken off the stack
+                  again.
                 </>
               )}
             </>

@@ -18,9 +18,23 @@ export function feedSourceLabel(source: FeedSource): string {
   }
 }
 
-/** Customer-facing alert headline. No LoRaWAN vocabulary, ever. */
-export function alertHeadline(kind: AlertKind): string {
+/**
+ * Customer-facing alert headline. No LoRaWAN vocabulary, ever.
+ *
+ * `| 'ingest_stalled'` because that enum value arrived in migration 0021,
+ * after the last `pnpm db:types` run, and this switch is exhaustive over the
+ * GENERATED enum. Without the case, an `ingest_stalled` row in the farm
+ * dashboard's activity feed renders an EMPTY headline — which is live traffic
+ * now that migration 0025 makes the kind customer-visible. The union collapses
+ * back to `AlertKind` on its own the next time the types regenerate; nothing
+ * needs deleting then.
+ */
+export function alertHeadline(kind: AlertKind | 'ingest_stalled'): string {
   switch (kind) {
+    // The word "ingest" never reaches a customer (CLAUDE.md #5). This is what
+    // it means to them. Matches lib/alerts/rules.ts KIND_COPY exactly.
+    case 'ingest_stalled':
+      return 'The whole place stopped reporting';
     case 'trough_low':
       return 'Trough low';
     case 'refill_rate_change':

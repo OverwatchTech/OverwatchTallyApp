@@ -3,11 +3,17 @@
 Sends open alerts out over SMS (Twilio) and email (Resend), honours quiet
 hours and the escalation chain, and appends a receipt for every attempt.
 
-> **Status: written, type-checks, NOT deployed, no provider credentials.**
-> Every unsupplied value is marked `SET BEFORE LAUNCH` in the code.
+> **Status (2026-08-04): DEPLOYED (v9, ACTIVE). Twilio connected and accepted.
+> But NOTHING INVOKES IT — there is no schedule — so no text goes out for any
+> alert.** `RESEND_API_KEY` is still unset, so every email records
+> `unconfigured`. Confirm all of that live, sending nothing and spending
+> nothing, with `GET ?check=rails`.
 > **[`docs/ALERT-DISPATCH.md`](../../../docs/ALERT-DISPATCH.md)** is the list
-> of what the owner must decide and supply — accounts, secrets, console
-> steps, scheduler, and what it costs per message at a realistic alert volume.
+> of what the owner must decide and supply — **§4, the scheduler, is the open
+> one.** `/settings/notifications` derives its state from those same live
+> facts (`public.alert_delivery_is_scheduled()`, migration 0027) and today
+> reads "Text messages are set up but nothing is sending them yet." It must
+> never again read "Sending" on the strength of an old receipt.
 
 **It does not open alerts.** `app.evaluate_alert_rules()` does, on pg_cron,
 every five minutes (migration `0011_alert_rules_engine.sql`). That function
@@ -37,12 +43,12 @@ a feed record, or another tenant, because the grant does not exist.
 |---|---|---|
 | `SUPABASE_URL` | injected by the platform | 503 |
 | `SUPABASE_ANON_KEY` | injected by the platform | 503 |
-| `ALERT_DISPATCH_JWT` | **not yet** | 503 |
-| `ALERT_DISPATCH_TOKEN` | **not yet** | 503 |
-| `TWILIO_ACCOUNT_SID` | **not yet** | every SMS records `unconfigured` |
-| `TWILIO_AUTH_TOKEN` | **not yet** | every SMS records `unconfigured` |
-| `TWILIO_FROM_NUMBER` | **not yet** | every SMS records `unconfigured` |
-| `RESEND_API_KEY` | **not yet** | every email records `unconfigured` |
+| `ALERT_DISPATCH_JWT` | **set** | 503 |
+| `ALERT_DISPATCH_TOKEN` | **set** | 503 |
+| `TWILIO_ACCOUNT_SID` | **set** | every SMS records `unconfigured` |
+| `TWILIO_AUTH_TOKEN` | **set** | every SMS records `unconfigured` |
+| `TWILIO_FROM_NUMBER` | **set** | every SMS records `unconfigured` |
+| `RESEND_API_KEY` | **NOT YET** | every email records `unconfigured` |
 | `RESEND_FROM` | optional | defaults to `Overwatch Tally <alerts@overwatchtally.com>` |
 
 `ALERT_DISPATCH_JWT` is a JWT signed with the project's JWT secret carrying

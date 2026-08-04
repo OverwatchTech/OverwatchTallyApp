@@ -12,6 +12,7 @@ import { readBudget } from '@/lib/admin/mdp/budget';
 import { readFleet } from '@/lib/admin/fleet';
 import { Chip, FactRow, Facts, Panel, Stat, buttonClass } from './console-ui';
 import { relativeTime } from '@/lib/admin/time';
+import { readIngestStalls, silenceLabel, stallSentence } from './ingest/stalls';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +23,7 @@ export default async function AdminOverviewPage() {
   // by a cross-tenant read, so it goes on the record like any other.
   await recordStaffAction({ action: 'console.overview', table: 'orgs' });
 
-  const [orgs, farms, devices, rate, dlq, budget, fleet] = await Promise.all([
+  const [orgs, farms, devices, rate, dlq, budget, fleet, stallReport] = await Promise.all([
     supabase.from('orgs').select('id, status'),
     supabase.from('farms').select('id, status'),
     supabase.from('devices').select('id, status'),
@@ -30,12 +31,15 @@ export default async function AdminOverviewPage() {
     readDeadLetterQueue(supabase, 5),
     readBudget(supabase),
     readFleet(supabase),
+    readIngestStalls(supabase),
   ]);
+  const stalls = stallReport.rows;
 
   const suspendedOrgs = (orgs.data ?? []).filter((org) => org.status === 'suspended').length;
   const liveDevices = (devices.data ?? []).filter((device) => device.status === 'live').length;
   const needsTruck = fleet.filter((row) => row.truckRollScore >= 40);
   const dlqWrong = dlq.openCount > 0;
+  const longestStall = stalls.reduce((worst, row) => Math.max(worst, row.silentMinutes ?? 0), 0);
 
   return (
     <Pad>
@@ -50,6 +54,22 @@ export default async function AdminOverviewPage() {
       />
 
       <KpiGrid>
+        {/* First tile on the triage screen, because a farm we cannot hear is
+            the failure that hides every other failure: no readings means no
+            trough_low, no gate alerts, no intake drop. Opened by the
+            `ingest_stalled` rule (0021) off our own last persisted reading. */}
+        <Stat
+          label="Farms gone silent"
+          value={stallReport.error === null ? stalls.length : '—'}
+          tone={stalls.length > 0 || stallReport.error !== null ? 'wrong' : 'plain'}
+          note={
+            stallReport.error !== null
+              ? 'the read failed — unknown, not zero'
+              : stalls.length === 0
+                ? 'every farm is still reporting'
+                : `longest ${silenceLabel(longestStall)}`
+          }
+        />
         <Stat
           label="Accounts"
           value={(orgs.data ?? []).length}
@@ -74,6 +94,47 @@ export default async function AdminOverviewPage() {
           tone={dlqWrong ? 'wrong' : 'plain'}
         />
       </KpiGrid>
+
+      {stallReport.error !== null && (
+        <Panel title="The silent-farm list could not be read">
+          <div className="ow-listitem">
+            <p className="ow-body ow-wrong">
+              <span className="ow-machine">staff_ingest_stalls()</span> failed:{' '}
+              {stallReport.error}. Treat the tile above as unknown, not as zero — an outage would
+              look exactly like this.
+            </p>
+          </div>
+        </Panel>
+      )}
+
+      {stalls.length > 0 && (
+        <Panel
+          title="Nothing is arriving from these farms"
+          note="One alert per farm, opened off the last reading we persisted. MDP is never asked — that is the point, so MDP going dark cannot hide it. Nothing texts anybody about these; the dispatcher has no schedule yet."
+          action={
+            <Link href="/admin/ingest" className={buttonClass(true)}>
+              Open ingest health
+            </Link>
+          }
+        >
+          <ul>
+            {stalls.slice(0, 5).map((row) => (
+              <li key={row.alertId} className="ow-listitem tight">
+                <div className="ow-inline" style={{ alignItems: 'flex-start' }}>
+                  <Chip tone="wrong">{silenceLabel(row.silentMinutes)}</Chip>
+                  <div style={{ minWidth: 0 }}>
+                    <p className="ow-body ow-wrong">{stallSentence(row)}</p>
+                    <p className="ow-quiet ow-machine" style={{ fontSize: '12px' }}>
+                      last envelope {relativeTime(row.lastHeardAt)} · threshold{' '}
+                      {row.staleMinutes ?? '—'} min
+                    </p>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
 
       <Cols2>
         <Panel

@@ -30,6 +30,7 @@ export type AlertKind =
   | 'sensor_offline'
   | 'battery_low'
   | 'gateway_offline'
+  | 'ingest_stalled'
   | 'mdp_system_messages';
 
 export type Severity = 'info' | 'warn' | 'critical';
@@ -349,21 +350,45 @@ export function describeAlert(
           // is the difference between a number and a guess (CLAUDE.md #8) —
           // this farm has neither an override nor a farm row, so the 30% here
           // is the assumption, and the rule line says the same.
-          ...fact('Waste allowed for', (() => {
-            const w = number(d, 'waste_factor');
-            if (w === null) return null;
-            const shown = pct(w * 100);
-            switch (text(d, 'waste_factor_source')) {
-              case 'assumed':
-                return `${shown} assumed`;
-              case 'rule_override':
-                return `${shown} set on this rule`;
-              case null:
-                return shown;
-              default:
-                return `${shown} set for this farm`;
-            }
-          })()),
+          //
+          // CHANGED by migration 0024. The label is no longer "allowed for",
+          // because it is not allowed for in this number: `feed_rate_kg_per_day`
+          // is dispensed mass out of `feed_events` and already contains the
+          // wasted hay, so discounting the stack by it as well counted the
+          // loss twice and understated the runway by 1 ÷ (1 − waste). The fact
+          // stays, with its provenance, and now says what it does — dropping
+          // the disclosure along with the coefficient would leave the reader
+          // unable to tell that from the screen going quiet.
+          //
+          // `waste_factor_applied_to_days` is read off the payload rather than
+          // assumed here, so an older alert row written before 0024 (where the
+          // key is absent and the factor DID divide) still describes itself
+          // correctly.
+          ...fact(
+            number(d, 'waste_factor') !== null && d['waste_factor_applied_to_days'] === false
+              ? 'Waste on record'
+              : 'Waste allowed for',
+            (() => {
+              const w = number(d, 'waste_factor');
+              if (w === null) return null;
+              const shown = pct(w * 100);
+              const provenance = (() => {
+                switch (text(d, 'waste_factor_source')) {
+                  case 'assumed':
+                    return `${shown} assumed`;
+                  case 'rule_override':
+                    return `${shown} set on this rule`;
+                  case null:
+                    return shown;
+                  default:
+                    return `${shown} set for this farm`;
+                }
+              })();
+              return d['waste_factor_applied_to_days'] === false
+                ? `${provenance} · already in the feeding rate, not taken off the stack`
+                : provenance;
+            })(),
+          ),
           ...(missing !== null && missing > 0
             ? [{ label: 'Stacks with no bale weight', value: String(missing) }]
             : []),
@@ -404,6 +429,56 @@ export function describeAlert(
         detail: 'Readings are not coming through right now. We can see it too, and we are on it.',
         facts: [...fact('Last reading', when(d, 'last_seen_at', tz))],
       };
+
+    // THE WORD "INGEST" NEVER REACHES THIS SCREEN. The enum value is
+    // `ingest_stalled` because that is what broke on our side; a rancher
+    // reads what it means to them, which is that nothing from their place is
+    // being recorded. Same family as gateway/webhook/uplink/telemetry under
+    // CLAUDE.md #5, and it is handled the same way.
+    //
+    // Reachable when the rule sets `customer_visible` (migration 0025 turns
+    // that on by default, and the settings screen hides the rule when it is
+    // off). The staff version of the same alert is on /admin/ingest and says
+    // what a staff reader needs instead.
+    //
+    // No apology (CLAUDE.md #11) and no vagueness: it says what has stopped,
+    // for how long, how many sensors it covers, and that we already know.
+    case 'ingest_stalled': {
+      const where = place(d, 'this operation');
+      const live = number(d, 'sensors_live');
+      const threshold = number(d, 'stale_minutes');
+
+      // "Quiet for" is computed from the clock, NOT read out of
+      // `details.silent_minutes`. That stored figure is how long the place
+      // had been quiet when the alert OPENED; printing it six hours later
+      // says "quiet for 60 min" about an outage that is still running, which
+      // is a stale number presented as a live one (CLAUDE.md #8). The alert
+      // stays open for the whole outage, so this fact has to move with it.
+      const lastSeen = text(d, 'last_seen_at');
+      const since = lastSeen === null ? NaN : Date.parse(lastSeen);
+      const quietMinutes = Number.isFinite(since) ? (Date.now() - since) / 60_000 : null;
+
+      return {
+        title: `Nothing is reporting from ${where}`,
+        detail:
+          'Every sensor on the place has gone quiet at once, so nothing is being recorded right ' +
+          'now. That points at the line out, not at the sensors. We can see it too, and we are ' +
+          'on it — the readings you are missing cannot be recovered afterwards.',
+        facts: [
+          ...fact('Last reading', when(d, 'last_seen_at', tz)),
+          ...fact(
+            'Quiet for',
+            quietMinutes === null || quietMinutes < 0
+              ? null
+              : quietMinutes < 60
+                ? `${Math.round(quietMinutes)} min`
+                : `${(quietMinutes / 60).toFixed(1)} hr`,
+          ),
+          ...fact('Alerts after', threshold === null ? null : `${Math.round(threshold)} min`),
+          ...fact('Sensors affected', live === null ? null : live.toLocaleString('en-US')),
+        ],
+      };
+    }
 
     default:
       return {

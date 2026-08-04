@@ -27,9 +27,12 @@
 //    Imperial display is `formatMeasure()`'s job in `packages/ui`, at the
 //    render layer, and nowhere else (CLAUDE.md hard rule 6).
 //
-// 6. NO SILENT COEFFICIENTS THAT CHANGE THE ANSWER. Dry matter and waste are
-//    required parameters on `daysOfFeedOnHand`, not optional ones with
-//    defaults — without them the forecast reads optimistic by weeks. Where a
+// 6. NO SILENT COEFFICIENTS THAT CHANGE THE ANSWER. Dry matter, waste, and the
+//    `demandBasis` that decides whether waste applies at all are required
+//    parameters on `daysOfFeedOnHand`, not optional ones with defaults —
+//    without dry matter the forecast reads optimistic by weeks, and a
+//    defaulted basis is what let waste get counted twice and read short by
+//    1 ÷ (1 − waste) on every surface at once. Where a
 //    default does exist (the weather curve, the ton definition) it is
 //    documented, exposed as a parameter, and echoed in `assumptions` with
 //    `source: 'default'` so the UI can show that nobody on the farm chose it.
@@ -41,8 +44,9 @@
 //   consumptionRate     drawdown per day, median-of-slopes on refill-segmented
 //                       legs (least squares is defeated by feed deliveries —
 //                       see the counter-example kept in that module)
-//   daysOfFeedOnHand    inventory ÷ demand, with the dry-matter and waste
-//                       multipliers applied BEFORE the division
+//   daysOfFeedOnHand    inventory ÷ demand, converted to dry matter first, and
+//                       with the waste factor applied to the stack only when
+//                       `demandBasis` says the demand does not already carry it
 //   weatherAdjustment   documented intake curve vs effective temperature;
 //                       returns adjusted beside raw, never instead of it
 //   intakeAnomaly       per-pen z-score against that pen's own trailing
@@ -111,6 +115,7 @@ export type {
   DaysOfFeedInput,
   DaysOfFeedInvalidReason,
   DaysOfFeedResult,
+  DemandBasis,
   WasteFactorMethod,
 } from './days-of-feed';
 
