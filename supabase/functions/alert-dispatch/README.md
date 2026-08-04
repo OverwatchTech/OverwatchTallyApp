@@ -66,9 +66,12 @@ Nothing here crashes and nothing overstates.
   to the other channel.
 - Provider error → `{"status":"failed","error":"twilio http 400 code 21610"}`,
   retried on later runs up to three attempts per (tier, recipient).
-- Quiet hours → `{"status":"suppressed_quiet_hours"}`. The alert row itself
-  was opened the instant the condition became true; quiet hours silence the
-  phone, never the record.
+- Quiet hours → `{"status":"suppressed_quiet_hours"}`. **A hold, not a
+  cancellation.** The alert row itself was opened the instant the condition
+  became true; quiet hours silence the phone, never the record, and only until
+  the window ends. Written **once** per (tier, recipient), excluded from the
+  retry count, and followed by a real `sent` on the first run after the window
+  closes. See §Quiet hours below.
 - Receipt write fails after a send → logged as `receipt_write_failed` and
   counted as an error, not as a delivery.
 
@@ -92,9 +95,65 @@ Supabase scheduled functions or any external scheduler.
 { "from": "21:00", "to": "06:00", "severities": ["info", "warn"] }
 ```
 
-`severities` lists what the window silences and defaults to `info` + `warn`.
-Critical is not silenced by default: it is, by definition, the thing worth
-waking someone for.
+`severities` lists what the window holds and defaults to `info` + `warn`.
+**Critical can never be held.** It is stripped from the list on read, so a
+settings screen that writes `["info","warn","critical"]` gets `["info","warn"]`
+— the water being off is the thing the product exists to wake somebody for,
+and one tick box must not turn that into overnight silence.
+
+## Quiet hours hold the call; they do not cancel it
+
+Owner's decision, and the behaviour the tests pin down:
+
+| Farm-local time | What happens |
+|---|---|
+| 02:00 | alert opens, in-app receipt written by the rules engine |
+| 02:00 | first dispatch run: **one** `suppressed_quiet_hours` receipt, tier 0 |
+| 02:05 – 04:55 | 35 further runs, **nothing written** — the hold already exists |
+| 05:00 | window ends: tier 0 is called for real, `sent` |
+| 05:15 | tier 1, per the chain |
+| 05:45 | tier 2 |
+
+Three properties make that work, and removing any one of them restores the
+original defect (an 02:00 alert paging nobody, ever):
+
+1. **A hold is not terminal.** `alreadySettled` counts only `sent` and
+   `unconfigured`. Listing `suppressed_quiet_hours` there is what made quiet
+   hours permanently cancel the call.
+2. **A hold is not an attempt.** `attemptsFor` skips it, or the third hold
+   trips `MAX_ATTEMPTS_PER_RECIPIENT` and produces the same silence by
+   another route.
+3. **A hold is written once.** `alreadyHeld` gates it, or every five-minute
+   run appends another receipt and `alerts.deliveries` grows without bound.
+
+Two further rules keep the release from being a barrage:
+
+- **At most one tier per run**, lowest tier first. A tier is stepped over only
+  when everybody on it is settled or out of retries; a tier that is merely
+  held stops the walk, because nobody has been called yet and there is no
+  first responder to escalate away from.
+- **The escalation clock runs from the first real attempt**, not from
+  `opened_at` (`escalationAnchor`). Otherwise tiers 0, 1 and 2 are all overdue
+  the moment a long hold releases and the whole chain drains in three ticks.
+  Outside quiet hours this changes nothing that was not already true — the
+  first attempt lands on the first tick after open.
+
+The batch released at the window boundary is dispatched **most severe first,
+then oldest first** (`dispatchOrder` in `index.ts`); `alert_dispatch_queue`
+orders by `opened_at` alone, which is the wrong order for the one minute of
+the day when a night's worth of alerts is released together.
+
+The wire value stays `suppressed_quiet_hours`. `apps/web/lib/alerts/delivery.ts`
+already renders it as *"held for quiet hours — the alert still opened"*: the
+copy was right and the behaviour was wrong. A new status string would fall
+through that switch's `default:` and paint the hold red as an unknown failure.
+
+**Push notifications.** The native iOS/Android app will add a third `Channel`.
+The hold/release logic keys on (tier, recipient) and never on channel, so it
+needs no change; the two places to touch are `recipientsForTier` in
+`schedule.ts` and a rail in `channels.ts`. Whether a quiet window should hold
+a *silent* push at all is a real question for that day and deliberately not
+answered here.
 
 `alert_rules.escalation`
 
@@ -134,4 +193,21 @@ npx tsc -p supabase/functions/alert-dispatch/tsconfig.typecheck.json
 ```
 
 Type-checks on a machine without the Deno toolchain (`deno_shim.d.ts`
-supplies the two globals this function touches; Deno never reads it).
+supplies the two globals this function touches; Deno never reads it). The
+test file is excluded from that config — it imports vitest, which is not
+resolvable from this directory, and nothing in the deployed graph imports it.
+
+```
+cd supabase/functions/alert-dispatch
+../../../packages/forecast/node_modules/.bin/vitest run --root .
+```
+
+`schedule.test.ts` replays the 5-minute evaluator against `schedule.ts`'s pure
+decision functions with an injected clock — an alert opening at 02:00 farm-local
+inside a 21:00–05:00 window, nobody acknowledging — and asserts no send before
+05:00, exactly one held receipt, a real send on the first run after 05:00, and
+an untouched retry budget. **It is not in `pnpm test`**: `supabase/functions`
+is not a pnpm workspace package (`pnpm-workspace.yaml` covers `apps/*`,
+`packages/*`, `tools/*`), and adding one was out of scope for the change that
+wrote these tests. Run it by hand until that is fixed, or the quiet-hours
+behaviour is unguarded in CI.

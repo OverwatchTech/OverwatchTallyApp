@@ -16,5 +16,10 @@
     "skipLibCheck": true,
     "types": []
   },
-  "include": ["./*.ts", "./deno_shim.d.ts"]
+  // The deployed graph only. `*.test.ts` imports vitest, which is a workspace
+  // devDependency and not resolvable from this directory; it is transpiled and
+  // run by vitest instead (README §verify). Nothing imports it from index.ts,
+  // so it is not part of the bundle either.
+  "include": ["./*.ts", "./deno_shim.d.ts"],
+  "exclude": ["./*.test.ts"]
 }

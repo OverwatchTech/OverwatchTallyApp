@@ -29,16 +29,10 @@
 // SECURITY: no service_role here (CLAUDE.md #9) — see pg.ts.
 
 import { RpcClient, RpcError } from './pg.ts';
-import { readRails, sendEmail, sendSms, suppressed } from './channels.ts';
+import { heldForQuietHours, readRails, sendEmail, sendSms } from './channels.ts';
 import { renderMessage } from './render.ts';
-import {
-  MAX_ATTEMPTS_PER_RECIPIENT,
-  alreadySettled,
-  attemptsFor,
-  dueTiers,
-  isSilenced,
-} from './schedule.ts';
-import type { DeliveryReceipt, QueuedAlert, Recipient } from './types.ts';
+import { alreadyHeld, planDispatch } from './schedule.ts';
+import type { DeliveryReceipt, QueuedAlert } from './types.ts';
 
 const DEFAULT_LIMIT = 50;
 
@@ -98,51 +92,65 @@ function readConfig(): { config: Config | null; missing: string[] } {
   };
 }
 
-/** Recipients addressable at this tier, staff/customer split already applied. */
-function recipientsForTier(alert: QueuedAlert, tier: number): Recipient[] {
-  return alert.recipients.filter(
-    (r) => r.tier === tier && (r.channel === 'sms' || r.channel === 'email'),
-  );
-}
-
+/**
+ * Carry out this run's plan for one alert. Every decision — which tier, hold
+ * or send, whether to write anything at all — was made by `planDispatch`,
+ * which is pure and tested (`schedule.test.ts`). This function only performs.
+ */
 async function dispatchAlert(
   alert: QueuedAlert,
   rails: ReturnType<typeof readRails>,
   now: Date,
 ): Promise<DeliveryReceipt[]> {
-  const tiers = dueTiers(alert, now);
-  if (tiers.length === 0) return [];
+  const plan = planDispatch(alert, now);
+  if (plan.length === 0) return [];
 
-  const silenced = isSilenced(alert, now);
   const message = renderMessage(alert);
   const smsText = `${message.subject}. ${message.body}`;
   const receipts: DeliveryReceipt[] = [];
 
-  for (const tier of tiers) {
-    for (const recipient of recipientsForTier(alert, tier.tier)) {
-      if (alreadySettled(alert.deliveries, tier.tier, recipient.id)) continue;
-      if (attemptsFor(alert.deliveries, tier.tier, recipient.id) >= MAX_ATTEMPTS_PER_RECIPIENT) {
-        continue;
-      }
-
-      if (silenced) {
-        // Quiet hours silence the phone, never the record. The alert row
-        // has been open and visible in-app since the condition fired.
-        receipts.push(suppressed(recipient, tier.tier));
-        continue;
-      }
-
-      if (recipient.channel === 'sms') {
-        receipts.push(await sendSms(rails.twilio, recipient, tier.tier, smsText));
-      } else {
-        receipts.push(
-          await sendEmail(rails.resend, recipient, tier.tier, message.subject, message.body),
-        );
-      }
+  for (const step of plan) {
+    if (step.action === 'hold') {
+      // Quiet hours silence the phone, never the record — and only until the
+      // window ends. The alert row has been open and visible in-app since the
+      // condition fired, and this receipt says the call is still owed.
+      receipts.push(heldForQuietHours(step.recipient, step.tier));
+      continue;
+    }
+    if (step.recipient.channel === 'sms') {
+      receipts.push(await sendSms(rails.twilio, step.recipient, step.tier, smsText));
+    } else {
+      receipts.push(
+        await sendEmail(rails.resend, step.recipient, step.tier, message.subject, message.body),
+      );
     }
   }
 
   return receipts;
+}
+
+const SEVERITY_RANK: Record<string, number> = { critical: 0, warn: 1, info: 2 };
+
+/**
+ * Most severe first, then oldest first.
+ *
+ * `alert_dispatch_queue` orders by `opened_at` alone, which is the right
+ * default for a quiet night and the wrong one for the minute a quiet window
+ * ends: a batch held since 21:00 is released together, and if the run is cut
+ * short by the limit, or a provider starts rate-limiting halfway through, the
+ * messages that got out should be the ones about the water being off — not
+ * whichever alert happened to open first.
+ */
+function dispatchOrder(queue: QueuedAlert[]): QueuedAlert[] {
+  return [...queue].sort((a, b) => {
+    const ra = SEVERITY_RANK[a.severity] ?? 9;
+    const rb = SEVERITY_RANK[b.severity] ?? 9;
+    if (ra !== rb) return ra - rb;
+    const ta = Date.parse(a.opened_at);
+    const tb = Date.parse(b.opened_at);
+    if (!Number.isFinite(ta) || !Number.isFinite(tb)) return 0;
+    return ta - tb;
+  });
 }
 
 interface RunSummary {
@@ -174,7 +182,7 @@ async function run(config: Config, limit: number): Promise<RunSummary> {
     errors: 0,
   };
 
-  for (const alert of queue) {
+  for (const alert of dispatchOrder(queue)) {
     let receipts: DeliveryReceipt[];
     try {
       receipts = await dispatchAlert(alert, rails, now);
@@ -191,13 +199,36 @@ async function run(config: Config, limit: number): Promise<RunSummary> {
     }
     if (receipts.length === 0) continue;
 
+    // `unconfigured` is no longer terminal (schedule.ts, HELD_STATUSES), which
+    // is what lets a rail start working the moment its credentials arrive. The
+    // cost of that is this dedup: without it an unconfigured rail would append
+    // a fresh receipt every five minutes for as long as the alert stays open.
+    //
+    // Recorded once per (tier, recipient, rail), same as a quiet-hours hold.
+    // Done here rather than in planDispatch so the scheduler stays a pure
+    // function of the alert and the clock, with no knowledge of which
+    // providers happen to be configured this minute.
+    // recipient_id is optional on the receipt type (in-app receipts carry
+    // none). A receipt we cannot key on is always written rather than deduped
+    // — losing one is worse than repeating one.
+    const fresh = receipts.filter(
+      (r) =>
+        r.status !== 'unconfigured' ||
+        r.recipient_id === undefined ||
+        !alreadyHeld(alert.deliveries, r.tier, r.recipient_id, 'unconfigured'),
+    );
+    if (fresh.length === 0) continue;
+
     try {
       await rpc.call<void>('alert_dispatch_record', {
         p_alert_id: alert.alert_id,
-        p_receipts: receipts,
+        p_receipts: fresh,
       });
       summary.alerts_touched += 1;
-      for (const r of receipts) {
+      // Count and log what was RECORDED, not what was produced. A duplicate
+      // `unconfigured` that the filter above dropped was never written, and a
+      // summary that counts it would overstate what the run did.
+      for (const r of fresh) {
         summary.receipts[r.status] = (summary.receipts[r.status] ?? 0) + 1;
       }
       log({
@@ -205,7 +236,7 @@ async function run(config: Config, limit: number): Promise<RunSummary> {
         alertId: alert.alert_id,
         kind: alert.kind,
         staffOnly: alert.staff_only,
-        statuses: receipts.map((r) => `${r.channel}:${r.status}`),
+        statuses: fresh.map((r) => `${r.channel}:${r.status}`),
       });
     } catch (err) {
       // The message may well have gone out; the receipt did not land. Say
@@ -222,10 +253,68 @@ async function run(config: Config, limit: number): Promise<RunSummary> {
   return summary;
 }
 
+/**
+ * Answers "will a text actually go out", without sending one.
+ *
+ * Secrets on Supabase are write-only: once set, nobody — not the owner, not
+ * the dashboard, not the management API — can read them back. So "did I paste
+ * the right auth token" has no direct answer, and the only honest way to check
+ * is to ask the provider whether the pair works.
+ *
+ * Twilio's account-fetch endpoint is the right probe: it is a plain GET, it
+ * sends no message, it costs nothing, and it distinguishes the three cases
+ * that matter — 200 the credentials are good, 401 they are not, anything else
+ * is Twilio having a bad day rather than us being misconfigured. Resend's
+ * domain list does the same job.
+ *
+ * NOTHING SECRET IS RETURNED. Not the value, not a prefix, not a length. The
+ * caller learns ready / rejected / not configured and an HTTP status, which is
+ * everything needed to act and nothing useful to an attacker.
+ */
+async function checkRails(): Promise<Record<string, unknown>> {
+  const rails = readRails();
+
+  const sms = rails.twilio === null
+    ? { state: 'not_configured' as const }
+    : await fetch(
+        `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(rails.twilio.accountSid)}.json`,
+        { headers: { Authorization: `Basic ${btoa(`${rails.twilio.accountSid}:${rails.twilio.authToken}`)}` } },
+      )
+        .then((r) => ({
+          state: r.status === 200 ? ('ready' as const)
+            : r.status === 401 ? ('rejected' as const)
+            : ('error' as const),
+          http: r.status,
+        }))
+        .catch(() => ({ state: 'unreachable' as const }));
+
+  const email = rails.resend === null
+    ? { state: 'not_configured' as const }
+    : await fetch('https://api.resend.com/domains', {
+        headers: { Authorization: `Bearer ${rails.resend.apiKey}` },
+      })
+        .then((r) => ({
+          state: r.status === 200 ? ('ready' as const)
+            : r.status === 401 || r.status === 403 ? ('rejected' as const)
+            : ('error' as const),
+          http: r.status,
+        }))
+        .catch(() => ({ state: 'unreachable' as const }));
+
+  return { sms, email, missing: rails.missing };
+}
+
 Deno.serve(async (req: Request): Promise<Response> => {
   // Probes and health checks get a 200. A scheduler that answers 405 to a
   // GET tends to be marked unhealthy by whatever is watching it.
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+    // ?check=rails asks the providers whether the credentials work. Opt-in,
+    // because the plain probe runs often and must stay free — this one makes
+    // two outbound calls.
+    if (req.method === 'GET' && new URL(req.url).searchParams.get('check') === 'rails') {
+      const { missing } = readConfig();
+      return json(200, { ok: true, fn: 'alert-dispatch', rails: await checkRails(), db_missing: missing });
+    }
     return json(200, { ok: true, fn: 'alert-dispatch' });
   }
   if (req.method !== 'POST') {

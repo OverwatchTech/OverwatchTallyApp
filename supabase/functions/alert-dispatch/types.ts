@@ -43,7 +43,13 @@ export type DeliveryStatus =
   | 'failed'
   /** No credentials for this rail. Nothing was attempted, nothing claimed. */
   | 'unconfigured'
-  /** Inside the rule's quiet hours for this severity. Deliberate silence. */
+  /**
+   * HELD, not cancelled. Inside the rule's quiet hours for this severity, so
+   * nothing was sent — and the call is still owed. `schedule.ts` treats this
+   * as non-terminal and excludes it from the retry count; the first run after
+   * the window ends places the call and appends a `sent` next to it. Written
+   * once per (tier, recipient), so the log reads as a history and not a loop.
+   */
   | 'suppressed_quiet_hours'
   /** Recorded in the database at open; the alert row is the notification. */
   | 'delivered';

@@ -212,6 +212,12 @@ export async function sendEmail(
   }
 }
 
-export function suppressed(recipient: Recipient, tier: number): DeliveryReceipt {
+/**
+ * The deferral receipt. Nothing was sent and nothing is claimed — but this is
+ * a promise, not a verdict: `schedule.ts` treats it as non-terminal and the
+ * call goes out on the first run after the quiet window ends. Written once per
+ * (tier, recipient); see `alreadyHeld`.
+ */
+export function heldForQuietHours(recipient: Recipient, tier: number): DeliveryReceipt {
   return receipt(recipient, tier, 'suppressed_quiet_hours');
 }
