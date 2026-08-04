@@ -304,6 +304,50 @@ async function checkRails(): Promise<Record<string, unknown>> {
   return { sms, email, missing: rails.missing };
 }
 
+/**
+ * Does ALERT_DISPATCH_JWT actually work?
+ *
+ * The two provider rails can be checked against Twilio and Resend, but the
+ * database rail is the one most likely to be wrong and was the one we could
+ * not see: a JWT is a long opaque string, and a token signed with the wrong
+ * secret looks exactly like a token signed with the right one until PostgREST
+ * refuses it. Left unchecked, the first symptom is the dispatcher answering
+ * 401 at 3am on the night it was finally needed.
+ *
+ * `alert_dispatch_queue` is the right probe: it is exactly what the dispatcher
+ * calls in anger, it is a read with no side effects, and `alert_dispatcher`
+ * holds EXECUTE on it and SELECT on nothing else — so a 200 proves the token
+ * is signed correctly AND carries the right role AND that the role's grants
+ * survived. The response body is discarded; only the status is reported.
+ */
+async function checkDb(): Promise<Record<string, unknown>> {
+  const { config, missing } = readConfig();
+  if (config === null) return { state: 'not_configured', missing };
+
+  return await fetch(`${config.baseUrl}/rest/v1/rpc/alert_dispatch_queue`, {
+    method: 'POST',
+    headers: {
+      apikey: config.apiKey,
+      Authorization: `Bearer ${config.dispatchJwt}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ p_limit: 1 }),
+  })
+    .then((r) => ({
+      state: r.status === 200 ? ('ready' as const)
+        : r.status === 401 ? ('rejected' as const)
+        : r.status === 403 ? ('wrong_role' as const)
+        : ('error' as const),
+      http: r.status,
+      hint: r.status === 401
+        ? 'ALERT_DISPATCH_JWT is not signed with this project\'s JWT secret'
+        : r.status === 403
+        ? 'the token is valid but its role lacks EXECUTE on alert_dispatch_queue'
+        : undefined,
+    }))
+    .catch(() => ({ state: 'unreachable' as const }));
+}
+
 Deno.serve(async (req: Request): Promise<Response> => {
   // Probes and health checks get a 200. A scheduler that answers 405 to a
   // GET tends to be marked unhealthy by whatever is watching it.
@@ -312,8 +356,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     // because the plain probe runs often and must stay free — this one makes
     // two outbound calls.
     if (req.method === 'GET' && new URL(req.url).searchParams.get('check') === 'rails') {
-      const { missing } = readConfig();
-      return json(200, { ok: true, fn: 'alert-dispatch', rails: await checkRails(), db_missing: missing });
+      const [rails, db] = await Promise.all([checkRails(), checkDb()]);
+      return json(200, { ok: true, fn: 'alert-dispatch', rails, db });
     }
     return json(200, { ok: true, fn: 'alert-dispatch' });
   }
