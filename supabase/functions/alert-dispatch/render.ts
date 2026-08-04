@@ -10,6 +10,22 @@
 //
 // CLAUDE.md #11: plain verbs, active voice, sentence case, no exclamation
 // points, never apologize, never vague.
+//
+// STAY INSIDE GSM-7. Every character that reaches a phone must be in the GSM
+// 7-bit alphabet — plain ASCII plus a short list of accented characters. One
+// character outside it (en dash, em dash, a middot, a curly quote) forces the
+// WHOLE message into UCS-2, and a UCS-2 segment holds 70 characters instead of
+// 160. So a single typographic dash silently doubles or triples the cost of
+// every message of that kind and fragments it across more segments, each of
+// which is another chance for a carrier to drop one.
+//
+// Three had already crept in and were fixed: an en dash in the gate window
+// copy, a middot in the staff subject, an em dash in the MDP staff body. Use
+// a plain hyphen. The nicer dash is not worth 2x on every gate alert.
+//
+// The SMS BRAND PREFIX is applied in index.ts rather than here, so it lands
+// once on the assembled text and email — which carries a From name and a
+// subject line already — does not repeat it.
 
 import type { QueuedAlert } from './types.ts';
 
@@ -95,7 +111,8 @@ function customerMessage(alert: QueuedAlert): RenderedMessage {
         subject: `${place} is open`,
         body:
           `${farm}: the gate at ${place} is standing open` +
-          (from && to ? ` during the ${from}–${to} closed hours` : '') +
+          // Plain hyphen, not an en dash. See the encoding note at the top.
+          (from && to ? ` during the ${from}-${to} closed hours` : '') +
           '.',
       };
     }
@@ -153,7 +170,7 @@ function customerMessage(alert: QueuedAlert): RenderedMessage {
 
 function staffMessage(alert: QueuedAlert): RenderedMessage {
   const d = alert.details;
-  const subject = `[OT ${alert.severity}] ${alert.kind} · ${alert.farm_name}`;
+  const subject = `[OT ${alert.severity}] ${alert.kind} - ${alert.farm_name}`;
 
   switch (alert.kind) {
     case 'mdp_system_messages':
@@ -161,7 +178,7 @@ function staffMessage(alert: QueuedAlert): RenderedMessage {
         subject,
         body:
           `MDP SYSTEM_MESSAGES on farm ${alert.farm_id}. Webhook push limit reached or ` +
-          `repeated delivery failures — upstream data may be dropping. Envelope in raw_events ` +
+          `repeated delivery failures - upstream data may be dropping. Envelope in raw_events ` +
           `(raw_event_id ${str(d, 'raw_event_id', 'unknown')}). MDP retains one day.`,
       };
     case 'gateway_offline':

@@ -106,7 +106,20 @@ async function dispatchAlert(
   if (plan.length === 0) return [];
 
   const message = renderMessage(alert);
-  const smsText = `${message.subject}. ${message.body}`;
+
+  // Brand the text. A rancher's phone shows an unknown number at 04:00 and the
+  // first thing they need to know is who is calling — doubly so while Tally
+  // shares a Twilio number and A2P campaign with another product, which means
+  // the sender ID carries no signal at all.
+  //
+  // SMS only. Email already carries a From name and a subject line, and
+  // repeating the brand inside the body would just be noise.
+  //
+  // Plain ASCII with a hyphen, deliberately: see the GSM-7 note in render.ts.
+  // The prefix costs 24 of the 160 characters in a segment, so it is worth
+  // knowing that it can tip a long message into a second segment. That is an
+  // acceptable trade for being identifiable; it would not be for a decoration.
+  const smsText = `Overwatch Tally Alert - ${message.subject}. ${message.body}`;
   const receipts: DeliveryReceipt[] = [];
 
   for (const step of plan) {
