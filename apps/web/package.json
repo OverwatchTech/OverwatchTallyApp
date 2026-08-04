@@ -6,7 +6,7 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint --ignore-pattern public/maplibre",
     "typecheck": "tsc --noEmit",
     "e2e": "playwright test"
   },

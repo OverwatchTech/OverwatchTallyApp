@@ -3,11 +3,37 @@
 // alert appears only on an actual refill-rate flag. Per-head figures use
 // the current head count from placements — labeled as such, never
 // presented as a historical census.
+//
+// Honest labelling (CLAUDE.md #8): the volume is a pulse delta times a
+// litres-per-pulse factor, and no farm has a row in device_calibrations
+// yet, so that multiplier is a documented default nobody has checked
+// against a real meter. The screen says "estimate · meter not calibrated"
+// wherever it shows a volume, exactly as the farm overview does, and never
+// calls a volume "metered". Water blue is still correct — the rule is
+// liquid measurement, and an uncalibrated meter reading is not a
+// projection (hay).
 
 import { notFound } from 'next/navigation';
+import {
+  Badge,
+  Callout,
+  Card,
+  Cols2,
+  DataTable,
+  Kpi,
+  KpiGrid,
+  Legend,
+  LegendSwatch,
+  Pad,
+  PageHeader,
+  Tile,
+  TileGrid,
+  formatMeasure,
+  type DataTableColumn,
+  type SiUnit,
+  type TileState,
+} from '@overwatch/ui';
 import { createClient } from '@/lib/supabase/server';
-import { formatMeasure } from '@overwatch/ui';
-import { OpsHeader } from '@/lib/ops/ops-header';
 import {
   attributeWaterFeatureToPen,
   fetchFarm,
@@ -19,15 +45,32 @@ import {
 import {
   assessRefillRates,
   dailyByTrough,
+  eventInstant,
   temperatureTrace,
   troughsInEvents,
   waterHeadline,
+  type RefillAssessment,
 } from '@/lib/ops/water';
 import { lastNDayKeys } from '@/lib/ops/feed';
 import { dayLabel } from '@/lib/ops/tz';
 import { TroughTempChart, WaterPerHeadChart, type TempTraceRow, type WaterBarRow } from './water-charts';
 
 const WINDOW_DAYS = 14;
+
+/** A trough that has said nothing for this long reads as offline, not empty. */
+const QUIET_HOURS = 24;
+
+/**
+ * Split a formatted measure into its number and its unit so the Kpi can put
+ * the unit in its small trailing slot. Conversion still happens exactly once,
+ * inside formatMeasure (CLAUDE.md #6) — this only splits the string it
+ * returns.
+ */
+function measureParts(value: number, from: SiUnit, digits?: number): [string, string] {
+  const rendered = formatMeasure(value, from, digits === undefined ? undefined : { digits });
+  const cut = rendered.lastIndexOf(' ');
+  return [rendered.slice(0, cut), rendered.slice(cut + 1)];
+}
 
 export default async function WaterPage({ params }: { params: Promise<{ farmId: string }> }) {
   const { farmId } = await params;
@@ -93,134 +136,236 @@ export default async function WaterPage({ params }: { params: Promise<{ farmId: 
   });
 
   const refill = assessRefillRates(events, tz, days);
+  const refillOf = new Map(refill.map((r) => [r.troughId, r]));
   const headline = waterHeadline(daily);
   const drawdownCount = events.filter((e) => e.method === 'level_drawdown').length;
+  const flagged = refill.filter((r) => r.flagged);
+
+  // ── Trough tiles ──────────────────────────────────────────────────
+  // State is what the data can actually support: a refill-rate flag is the
+  // only "something is wrong" this screen knows, and silence past QUIET_HOURS
+  // is offline. There is deliberately NO fill bar: a fill percentage needs
+  // the trough measured and the sensor calibrated, and neither exists yet —
+  // an unlabelled bar would read as fullness and assert what we cannot.
+  const todayByTrough = daily[daily.length - 1]?.byTrough ?? {};
+  const lastSeen = new Map<string, number>();
+  for (const e of events) {
+    if (!e.trough_feature_id) continue;
+    const at = eventInstant(e);
+    if (!at) continue;
+    const prior = lastSeen.get(e.trough_feature_id);
+    if (prior === undefined || at.getTime() > prior) lastSeen.set(e.trough_feature_id, at.getTime());
+  }
+  const quietFloor = Date.now() - QUIET_HOURS * 3_600_000;
+  const troughTiles = troughIds
+    .map((id) => {
+      const seen = lastSeen.get(id) ?? 0;
+      const state: TileState = refillOf.get(id)?.flagged ? 'crit' : seen < quietFloor ? 'off' : 'ok';
+      return { id, name: featureName(id), todayL: todayByTrough[id] ?? 0, state };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const quietTroughs = troughTiles.filter((t) => t.state === 'off');
+
+  const [todayValue, todayUnit] = measureParts(headline.todayL, 'l', 0);
+  const avgParts =
+    headline.fourteenDayAvgL !== null ? measureParts(headline.fourteenDayAvgL, 'l', 0) : null;
+
+  const refillColumns: Array<DataTableColumn<RefillAssessment>> = [
+    { key: 'trough', header: 'Trough', cell: (r) => featureName(r.troughId) },
+    {
+      key: 'recent',
+      header: 'Refills/day · last 3',
+      align: 'right',
+      mono: true,
+      cell: (r) => (r.recentRate !== null ? r.recentRate.toFixed(1) : '—'),
+    },
+    {
+      key: 'prior',
+      header: 'Refills/day · prior 11',
+      align: 'right',
+      mono: true,
+      cell: (r) => (r.priorRate !== null ? r.priorRate.toFixed(1) : '—'),
+    },
+    {
+      key: 'change',
+      header: 'Change',
+      align: 'right',
+      mono: true,
+      cell: (r) =>
+        r.deviation !== null
+          ? `${r.deviation > 0 ? '+' : ''}${Math.round(r.deviation * 100)}%`
+          : '—',
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      cell: (r) =>
+        r.flagged ? (
+          <span style={{ color: 'var(--crit)' }}>
+            Refill rate changed — check the float valve before it&rsquo;s an animal problem.
+          </span>
+        ) : r.recentRate !== null ? (
+          <Badge variant="ok">Steady</Badge>
+        ) : (
+          <span style={{ color: 'var(--ink3)' }}>no refill counts from this trough yet</span>
+        ),
+    },
+  ];
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <OpsHeader
-        farmId={farm.id}
-        farmName={farm.name}
-        timezone={tz}
-        active="water"
-        subtitle={`Water · last ${WINDOW_DAYS} days`}
+    <Pad>
+      {/* The bar owns navigation: Water is one of its four tabs, and Overview,
+          Site Map and Feed & Forecast are the others. Movement is linked from
+          the farm overview. Nothing is repeated here. */}
+      <PageHeader
+        title="Water"
+        sub={
+          <>
+            {farm.name} · {tz} · last {WINDOW_DAYS} days · <b>{troughIds.length}</b> troughs
+            reporting · volumes are an <b>estimate</b>, the meter is not calibrated
+          </>
+        }
       />
 
-      {/* Headline: today vs 14-day average */}
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Today so far</p>
-          <p className="machine mt-1 text-lg text-[#4FB3D9]">
-            {formatMeasure(headline.todayL, 'l', { digits: 0 })}
-          </p>
-        </div>
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">{WINDOW_DAYS}-day average</p>
-          <p className="machine mt-1 text-lg text-[#4FB3D9]">
-            {headline.fourteenDayAvgL !== null
-              ? `${formatMeasure(headline.fourteenDayAvgL, 'l', { digits: 0 })}/day`
-              : '—'}
-          </p>
-        </div>
-        <div className="rounded-lg border border-hairline bg-card p-4 max-lg:col-span-2">
-          <p className="text-xs text-muted">Troughs reporting</p>
-          <p className="machine mt-1 text-lg text-foreground">{troughIds.length}</p>
-        </div>
-      </section>
+      {/* The one finding that matters, when there is one. No flag, no
+          callout — a green "all clear" banner is decoration. */}
+      {flagged.length > 0 && (
+        <Callout>
+          <b>
+            {flagged.map((r) => featureName(r.troughId)).join(', ')} changed refill rate.
+          </b>{' '}
+          The last 3 days run{' '}
+          <b>{flagged[0]!.recentRate!.toFixed(1)}/day</b> against a{' '}
+          <b>{flagged[0]!.priorRate!.toFixed(1)}/day</b> norm. Check the float valve before
+          it&rsquo;s an animal problem.
+        </Callout>
+      )}
 
-      {/* Consumption per head */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-base font-medium">Water per head by pen</h2>
-          <p className="machine text-xs text-muted">per current head count</p>
-        </div>
-        {attributedPens.length > 0 ? (
-          <WaterPerHeadChart data={chartRows} penNames={attributedPens.map(featureName)} />
+      <KpiGrid>
+        <Kpi
+          accent="water"
+          label="Used today"
+          value={todayValue}
+          unit={todayUnit}
+          sub="estimate · meter not calibrated"
+        />
+        <Kpi
+          accent="water"
+          label={`${WINDOW_DAYS}-day average`}
+          value={avgParts ? avgParts[0] : '—'}
+          unit={avgParts ? `${avgParts[1]}/day` : undefined}
+          sub="complete days only · estimate · meter not calibrated"
+        />
+        <Kpi
+          accent="ok"
+          label="Troughs reporting"
+          value={troughIds.length}
+          sub={
+            quietTroughs.length > 0
+              ? `${quietTroughs.length} silent for more than ${QUIET_HOURS} h`
+              : `all reporting inside ${QUIET_HOURS} h`
+          }
+        />
+      </KpiGrid>
+
+      <Card
+        title="Troughs"
+        sub="today so far"
+        aside={
+          <Legend>
+            <LegendSwatch tone="ok">reporting</LegendSwatch>
+            <LegendSwatch tone="crit">refill rate changed</LegendSwatch>
+            <LegendSwatch tone="off">no reading in {QUIET_HOURS} h</LegendSwatch>
+          </Legend>
+        }
+        padded={false}
+        note={
+          <>
+            <b>No fill level.</b> Turning a trough sensor into a percent full needs the trough
+            measured and a calibration set for that sensor; none exists on this farm, so these
+            tiles carry the volume drawn today and not a level. The volume itself is an{' '}
+            <b>estimate · meter not calibrated</b> — a pulse count times a litres-per-pulse
+            factor nobody has checked against a real meter.
+          </>
+        }
+      >
+        {troughTiles.length > 0 ? (
+          <TileGrid>
+            {troughTiles.map((t) => (
+              <Tile
+                key={t.id}
+                id={t.name}
+                value={formatMeasure(t.todayL, 'l', { digits: 0 })}
+                state={t.state}
+                title={
+                  t.state === 'off'
+                    ? `${t.name} — no reading in the last ${QUIET_HOURS} hours`
+                    : `${t.name} — drawn today so far, estimate`
+                }
+              />
+            ))}
+          </TileGrid>
         ) : (
-          <p className="text-sm text-muted">
-            {events.length === 0
-              ? `No water readings in the last ${WINDOW_DAYS} days.`
-              : 'Water is being metered, but no trough is tied to a pen with cattle in it, so a per-head figure would be a guess. Totals per trough are below.'}
-          </p>
+          <div className="ow-note">No trough is reporting water on this farm yet.</div>
         )}
-        {unattributedTroughs.length > 0 && attributedPens.length > 0 && (
-          <p className="mt-2 text-xs text-faint">
-            Not shown (no pen or head count to divide by):{' '}
-            {unattributedTroughs.map(featureName).join(', ')}
-          </p>
-        )}
-        {drawdownCount > 0 && (
-          <p className="mt-2 text-xs text-faint">
-            Includes {drawdownCount} level-drawdown readings — inferred from tank level, not
-            metered pulses.
-          </p>
-        )}
-      </section>
+      </Card>
 
-      {/* Temperature */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <h2 className="mb-4 text-base font-medium">Trough temperature</h2>
-        {tempRows.length > 0 ? (
-          <TroughTempChart data={tempRows} troughNames={troughIds.map(featureName)} timezone={tz} />
-        ) : (
-          <p className="text-sm text-muted">No temperature readings yet.</p>
-        )}
-      </section>
-
-      {/* Refill-rate watch */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <h2 className="mb-4 text-base font-medium">Refill watch</h2>
-        {refill.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-hairline text-xs text-muted">
-                  <th className="py-2 pr-4 font-normal">Trough</th>
-                  <th className="py-2 pr-4 font-normal">Refills/day · last 3</th>
-                  <th className="py-2 pr-4 font-normal">Refills/day · prior 11</th>
-                  <th className="py-2 pr-4 font-normal">Change</th>
-                  <th className="py-2 font-normal">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {refill.map((r) => (
-                  <tr key={r.troughId} className="border-b border-hairline/50">
-                    <td className="py-2 pr-4 text-foreground">{featureName(r.troughId)}</td>
-                    <td className="machine py-2 pr-4 text-xs">
-                      {r.recentRate !== null ? r.recentRate.toFixed(1) : '—'}
-                    </td>
-                    <td className="machine py-2 pr-4 text-xs">
-                      {r.priorRate !== null ? r.priorRate.toFixed(1) : '—'}
-                    </td>
-                    <td className="machine py-2 pr-4 text-xs">
-                      {r.deviation !== null
-                        ? `${r.deviation > 0 ? '+' : ''}${Math.round(r.deviation * 100)}%`
-                        : '—'}
-                    </td>
-                    <td className="py-2 text-xs">
-                      {r.flagged ? (
-                        <span className="text-alert">
-                          Refill rate changed — check the float valve before it&rsquo;s an animal
-                          problem.
-                        </span>
-                      ) : r.recentRate !== null ? (
-                        <span className="text-muted">steady</span>
-                      ) : (
-                        <span className="text-faint">no refill counts from this trough yet</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="mt-3 text-xs text-faint">
-              Flagged when the last 3 days drift more than 40% from the prior 11-day norm.
+      <Cols2>
+        <Card
+          title="Water per head by pen"
+          sub="per current head count"
+          note={
+            <>
+              {unattributedTroughs.length > 0 && attributedPens.length > 0 && (
+                <>
+                  Not shown (no pen or head count to divide by):{' '}
+                  {unattributedTroughs.map(featureName).join(', ')}.{' '}
+                </>
+              )}
+              {drawdownCount > 0 && (
+                <>
+                  Includes {drawdownCount} level-drawdown readings — inferred from tank level,
+                  not metered pulses.{' '}
+                </>
+              )}
+              Volumes are an <b>estimate · meter not calibrated</b>.
+            </>
+          }
+        >
+          {attributedPens.length > 0 ? (
+            <WaterPerHeadChart data={chartRows} penNames={attributedPens.map(featureName)} />
+          ) : (
+            <p className="text-muted">
+              {events.length === 0
+                ? `No water readings in the last ${WINDOW_DAYS} days.`
+                : 'Water use is being recorded, but no trough is tied to a pen with cattle in it, so a per-head figure would be a guess. Totals per trough are above.'}
             </p>
-          </div>
-        ) : (
-          <p className="text-sm text-muted">No troughs reporting in this window.</p>
-        )}
-      </section>
-    </div>
+          )}
+        </Card>
+
+        <Card title="Trough temperature" sub={`last ${WINDOW_DAYS} days`}>
+          {tempRows.length > 0 ? (
+            <TroughTempChart data={tempRows} troughNames={troughIds.map(featureName)} timezone={tz} />
+          ) : (
+            <p className="text-muted">No temperature readings yet.</p>
+          )}
+        </Card>
+      </Cols2>
+
+      <Card
+        title="Refill watch"
+        sub={`last 3 days against the prior ${WINDOW_DAYS - 3}`}
+        padded={false}
+        note="Flagged when the last 3 days drift more than 40% from the prior 11-day norm."
+      >
+        <DataTable
+          caption="Refill rate per trough, last 3 days against the prior 11"
+          columns={refillColumns}
+          rows={refill}
+          rowKey={(r) => r.troughId}
+          empty="No troughs reporting in this window."
+        />
+      </Card>
+    </Pad>
   );
 }

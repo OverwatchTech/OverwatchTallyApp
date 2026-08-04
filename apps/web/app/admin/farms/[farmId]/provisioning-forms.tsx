@@ -5,7 +5,7 @@
 // barn office, and must not land in a browser's saved-password store.
 import { useActionState } from 'react';
 import { IDLE } from '@/lib/admin/action-state';
-import { Field, FormNote, buttonClass, inputClass } from '@/lib/admin/ui';
+import { Field, FormNote, buttonClass, inputClass } from '../../console-ui';
 import { MIN_REASON_LENGTH } from '@/lib/admin/impersonation';
 import {
   registerDevicesWithMdp,
@@ -29,24 +29,24 @@ export function ApplicationForm({
   const [state, formAction, pending] = useActionState(saveApplication, IDLE);
 
   return (
-    <form action={formAction} className="space-y-3 p-4">
+    <form action={formAction} className="ow-form">
       <input type="hidden" name="farmId" value={farmId} />
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="ow-fgrid">
         <Field label="Application id" hint="From the MDP console. One Application per farm.">
           <input
             name="applicationId"
             defaultValue={applicationId ?? ''}
-            className={`${inputClass} machine`}
+            className={`${inputClass} mono`}
           />
         </Field>
         <Field label="Group id">
-          <input name="groupId" defaultValue={groupId ?? ''} className={`${inputClass} machine`} />
+          <input name="groupId" defaultValue={groupId ?? ''} className={`${inputClass} mono`} />
         </Field>
       </div>
       <Field label="Why" hint={reasonHint}>
         <input name="reason" required minLength={MIN_REASON_LENGTH} className={inputClass} />
       </Field>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="ow-inline">
         <button type="submit" disabled={pending} className={buttonClass()}>
           {pending ? 'Saving…' : 'Save application'}
         </button>
@@ -66,18 +66,18 @@ export function ApiCredentialsForm({
   const [state, formAction, pending] = useActionState(saveApiCredentials, IDLE);
 
   return (
-    <form action={formAction} className="space-y-3 p-4" autoComplete="off">
+    <form action={formAction} className="ow-form" autoComplete="off">
       <input type="hidden" name="farmId" value={farmId} />
       <Field label="Server address" hint="From the Application's Authentication panel.">
         <input
           name="serverAddress"
           defaultValue={serverAddress ?? 'https://us-openapi.milesight.com'}
-          className={`${inputClass} machine`}
+          className={`${inputClass} mono`}
         />
       </Field>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="ow-fgrid">
         <Field label="Client id">
-          <input name="clientId" required autoComplete="off" className={`${inputClass} machine`} />
+          <input name="clientId" required autoComplete="off" className={`${inputClass} mono`} />
         </Field>
         <Field label="Client secret" hint="Stored, then only ever shown masked.">
           <input
@@ -85,14 +85,14 @@ export function ApiCredentialsForm({
             type="password"
             required
             autoComplete="new-password"
-            className={`${inputClass} machine`}
+            className={`${inputClass} mono`}
           />
         </Field>
       </div>
       <Field label="Why" hint={reasonHint}>
         <input name="reason" required minLength={MIN_REASON_LENGTH} className={inputClass} />
       </Field>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="ow-inline">
         <button type="submit" disabled={pending} className={buttonClass()}>
           {pending ? 'Storing…' : 'Store credentials'}
         </button>
@@ -106,11 +106,11 @@ export function WebhookCredentialsForm({ farmId }: { farmId: string }) {
   const [state, formAction, pending] = useActionState(saveWebhookCredentials, IDLE);
 
   return (
-    <form action={formAction} className="space-y-3 p-4" autoComplete="off">
+    <form action={formAction} className="ow-form" autoComplete="off">
       <input type="hidden" name="farmId" value={farmId} />
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="ow-fgrid">
         <Field label="Webhook id" hint="The x-msc-webhook-uuid header on live deliveries.">
-          <input name="webhookUuid" required className={`${inputClass} machine`} />
+          <input name="webhookUuid" required className={`${inputClass} mono`} />
         </Field>
         <Field label="Webhook secret" hint="Signs HMAC-SHA256(secret, timestamp ‖ nonce).">
           <input
@@ -118,14 +118,14 @@ export function WebhookCredentialsForm({ farmId }: { farmId: string }) {
             type="password"
             required
             autoComplete="new-password"
-            className={`${inputClass} machine`}
+            className={`${inputClass} mono`}
           />
         </Field>
       </div>
       <Field label="Why" hint={reasonHint}>
         <input name="reason" required minLength={MIN_REASON_LENGTH} className={inputClass} />
       </Field>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="ow-inline">
         <button type="submit" disabled={pending} className={buttonClass()}>
           {pending ? 'Storing…' : 'Store signing material'}
         </button>
@@ -139,18 +139,18 @@ export function RotateTokenForm({ farmId }: { farmId: string }) {
   const [state, formAction, pending] = useActionState(rotateWebhookToken, IDLE);
 
   return (
-    <form action={formAction} className="space-y-3 p-4">
+    <form action={formAction} className="ow-form">
       <input type="hidden" name="farmId" value={farmId} />
       <Field label="Why" hint={reasonHint}>
         <input name="reason" required minLength={MIN_REASON_LENGTH} className={inputClass} />
       </Field>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="ow-inline">
         <button type="submit" disabled={pending} className={buttonClass()}>
           {pending ? 'Rotating…' : 'Rotate path token'}
         </button>
         <FormNote status={state.status} message={state.message} />
       </div>
-      <p className="text-xs text-alert">
+      <p className="ow-quiet ow-wrong">
         Ingest for this farm stops the moment this changes and stays down until the new callback URI
         is saved in the MDP console. Nothing that arrives in between is recoverable.
       </p>
@@ -162,18 +162,18 @@ export function RegisterDevicesForm({ farmId, pending: count }: { farmId: string
   const [state, formAction, submitting] = useActionState(registerDevicesWithMdp, IDLE);
 
   return (
-    <form action={formAction} className="space-y-3 p-4">
+    <form action={formAction} className="ow-form">
       <input type="hidden" name="farmId" value={farmId} />
       <Field label="Why" hint={reasonHint}>
         <input name="reason" required minLength={MIN_REASON_LENGTH} className={inputClass} />
       </Field>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="ow-inline">
         <button type="submit" disabled={submitting || count === 0} className={buttonClass(true)}>
           {submitting ? 'Registering…' : `Register ${count} with MDP`}
         </button>
         <FormNote status={state.status} message={state.message} />
       </div>
-      <p className="text-xs text-faint">
+      <p className="ow-quiet">
         Milesight has no batch endpoint: this spends one API call per device, plus one to mint a
         token if the cached one has expired.
       </p>

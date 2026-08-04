@@ -1,9 +1,28 @@
-import Link from "next/link";
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
-import { claimsFromSession, isManagerOrOwner } from "@/lib/auth/claims";
-import { TelemetryRail } from "@/components/telemetry-rail";
-import { signOut } from "./actions";
+// The portal shell — docs/reference/portal-mockup.html, `.app` / `.bar`.
+//
+// 54px bar over a single scrolling view, `height:100vh`, document locked.
+// This replaces the 56px sidebar that shipped in Phases 2–8; the sidebar's
+// routes did not go with it. Alerts, Settings, Operations and Sign out moved
+// into the account menu at the right end of the bar, which is the only place
+// the mockup leaves for them.
+//
+// WHAT THE BAR CANNOT KNOW HERE: this layout sits above the [farmId] segment,
+// so it never receives the param. The farm list and the per-farm open-alert
+// counts are read here (server, RLS-scoped) and handed to the client pieces in
+// components/farm-bar.tsx, which resolve the current farm from the pathname.
+//
+// PADDING: `.ow-view` carries none — the mockup's 22px lives in `.ow-pad`, and
+// converted screens supply their own <Pad>. The arbitrary variant below pads
+// any page root that is NOT a `.ow-pad`, so screens still waiting on their
+// conversion keep the gutter the old `<main className="p-8">` gave them
+// instead of going flush to the window edge.
+
+import { redirect } from 'next/navigation';
+import { AppShell, BrandLockup, Card, Pad } from '@overwatch/ui';
+import { createClient } from '@/lib/supabase/server';
+import { claimsFromSession, isManagerOrOwner } from '@/lib/auth/claims';
+import { BarStatus, FarmPickerMenu, FarmTabs, type BarFarm } from '@/components/farm-bar';
+import { signOut } from './actions';
 
 export default async function AppLayout({
   children,
@@ -15,107 +34,63 @@ export default async function AppLayout({
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  if (!user) redirect('/login');
 
   const {
     data: { session },
   } = await supabase.auth.getSession();
   const claims = claimsFromSession(session);
 
-  const { data: farms } = await supabase
-    .from("farms")
-    .select("id, name")
-    .order("name");
+  // The timezone rides along for the bar clock: a farm's numbers are counted
+  // in its own day, and the clock in the corner has to agree with them.
+  const { data: farmRows } = await supabase
+    .from('farms')
+    .select('id, name, timezone')
+    .order('name');
+  const farms: BarFarm[] = farmRows ?? [];
 
-  const onlyFarm = farms && farms.length === 1 ? farms[0] : undefined;
-  const farmHref = onlyFarm ? `/farms/${onlyFarm.id}` : "/";
-  const farmLabel = farms && farms.length > 1 ? "Farms" : "Farm";
+  // Open alerts for every farm the caller can see, in one read. Same predicate
+  // as fetchOpenAlertCount (vitals.ts) — MDP system messages are staff-only
+  // plumbing and never count against a farm.
+  const { data: openAlertRows } = await supabase
+    .from('alerts')
+    .select('farm_id')
+    .is('resolved_at', null)
+    .neq('kind', 'mdp_system_messages');
+  const alertCounts: Record<string, number> = {};
+  for (const row of openAlertRows ?? []) {
+    if (row.farm_id) alertCounts[row.farm_id] = (alertCounts[row.farm_id] ?? 0) + 1;
+  }
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="flex w-56 shrink-0 flex-col border-r border-hairline bg-background">
-        <div className="border-b border-hairline px-4 py-4">
-          <Link href="/" className="type-display text-sm text-foreground">
-            Overwatch Tally
-          </Link>
-        </div>
-
-        <nav className="flex-1 space-y-0.5 px-2 py-3 text-sm">
-          <Link
-            href={farmHref}
-            className="block rounded px-2 py-1.5 text-foreground hover:bg-card"
-          >
-            {farmLabel}
-          </Link>
-          <Link
-            href="/alerts"
-            className="block rounded px-2 py-1.5 text-foreground hover:bg-card"
-          >
-            Alerts
-          </Link>
-          {isManagerOrOwner(claims.memberRole) && (
-            <Link
-              href="/settings/members"
-              className="block rounded px-2 py-1.5 text-foreground hover:bg-card"
-            >
-              Settings
-            </Link>
-          )}
-          {claims.platformRole && (
-            <Link
-              href="/admin"
-              className="block rounded px-2 py-1.5 text-accent hover:bg-card"
-            >
-              Operations
-            </Link>
-          )}
-        </nav>
-
-        <div className="space-y-2 border-t border-hairline px-4 py-3">
-          <p className="text-xs text-muted">
-            signed in as {user.email}
-            {claims.memberRole && (
-              <>
-                {" · "}
-                <span className="machine text-foreground">
-                  {claims.memberRole}
-                </span>
-              </>
-            )}
-          </p>
-          <form action={signOut}>
-            <button
-              type="submit"
-              className="w-full rounded border border-hairline px-2 py-1 text-xs text-foreground transition-colors hover:border-accent hover:text-accent"
-            >
-              Sign out
-            </button>
-          </form>
-        </div>
-      </aside>
-
-      {/*
-        The rail is a farm-scoped strip: it renders itself only on
-        /farms/[farmId]/** and passes the page straight through everywhere
-        else, so non-farm routes keep the full width. Its width is reserved
-        from first paint (fixed w-32 aside on desktop, a 14-unit bottom bar
-        under 900px), so numbers arriving over Realtime never shift the page.
-      */}
-      <TelemetryRail>
-        <main className="min-w-0 flex-1 p-8">
-          {claims.orgId ? (
-            children
-          ) : (
-            <div className="mx-auto max-w-md rounded-lg border border-hairline bg-card p-6">
-              <h1 className="mb-1 text-base font-medium">Almost there</h1>
-              <p className="text-sm text-muted">
-                Your account is not connected to an operation yet. Your
-                installer finishes this step during setup.
-              </p>
-            </div>
-          )}
-        </main>
-      </TelemetryRail>
-    </div>
+    <AppShell
+      brand={<BrandLockup href="/" />}
+      farmPicker={farms.length > 1 ? <FarmPickerMenu farms={farms} /> : undefined}
+      tabs={<FarmTabs farms={farms} />}
+      status={
+        <BarStatus
+          farms={farms}
+          alertCounts={alertCounts}
+          email={user.email ?? ''}
+          canManage={isManagerOrOwner(claims.memberRole)}
+          isStaff={claims.platformRole !== null}
+          signOutAction={signOut}
+        />
+      }
+      viewClassName="[&>*:not(.ow-pad)]:p-[22px]"
+    >
+      {claims.orgId ? (
+        children
+      ) : (
+        <Pad>
+          <Card title="Almost there" className="max-w-[460px]">
+            <p style={{ color: 'var(--ink2)', lineHeight: 1.55 }}>
+              Your account is not connected to an operation yet. Your installer
+              finishes this step during setup.
+            </p>
+          </Card>
+        </Pad>
+      )}
+    </AppShell>
   );
 }

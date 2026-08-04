@@ -3,6 +3,14 @@
 // Order is triage order: is anything arriving, is anything failing to parse,
 // is the webhook refusing deliveries, are we about to run out of API budget.
 import Link from 'next/link';
+import {
+  DataTable,
+  KpiGrid,
+  Pad,
+  PageHeader,
+  TabPills,
+  type DataTableColumn,
+} from '@overwatch/ui';
 import { requireStaff } from '@/lib/admin/guard';
 import { recordStaffAction } from '@/lib/admin/audit';
 import {
@@ -11,9 +19,10 @@ import {
   readDeadLetterQueue,
   readFarmIngest,
   readIngestRate,
+  type FarmIngestRow,
 } from '@/lib/admin/ingest';
 import { readBudget } from '@/lib/admin/mdp/budget';
-import { Chip, Empty, Panel, Stat, buttonClass } from '@/lib/admin/ui';
+import { Chip, Empty, FactRow, Facts, Panel, Stat } from '../console-ui';
 import { relativeTime, shortDateTime } from '@/lib/admin/time';
 import { RateChart } from './rate-chart';
 import { RetryForm } from './retry-form';
@@ -44,35 +53,63 @@ export default async function IngestPage({
   const dlqWrong = dlq.openCount > 0;
   const overThreshold = dlq.openCount >= dlq.alertThreshold;
 
-  return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="type-display text-xl">Ingest health</h1>
-          <p className="mt-2 max-w-prose text-sm text-muted">
-            MDP keeps one day of data at best. Supabase is the system of record — an event we fail
-            to persist is gone for good.
-          </p>
-        </div>
-        <nav className="flex gap-2" aria-label="Window">
-          <Link
-            href="/admin/ingest?window=24"
-            aria-current={windowHours === 24 ? 'page' : undefined}
-            className={buttonClass(windowHours === 24)}
-          >
-            24 hours
-          </Link>
-          <Link
-            href="/admin/ingest?window=168"
-            aria-current={windowHours === 168 ? 'page' : undefined}
-            className={buttonClass(windowHours === 168)}
-          >
-            7 days
-          </Link>
-        </nav>
-      </header>
+  const farmColumns: Array<DataTableColumn<FarmIngestRow>> = [
+    {
+      key: 'farm',
+      header: 'Farm',
+      cell: (row) => (
+        <Link href={`/admin/farms/${row.farmId}`} className="ow-live">
+          {row.farmName}
+        </Link>
+      ),
+    },
+    {
+      key: 'application',
+      header: 'Application',
+      cell: (row) =>
+        row.webhookConfigured ? (
+          <span className="ow-quiet">set</span>
+        ) : (
+          <Chip tone="wrong">no application</Chip>
+        ),
+    },
+    {
+      key: 'last',
+      header: 'Last envelope',
+      mono: true,
+      align: 'right',
+      cell: (row) => (
+        <span className={row.lastEventAt === null ? 'ow-wrong' : undefined}>
+          {relativeTime(row.lastEventAt)}
+        </span>
+      ),
+    },
+  ];
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+  return (
+    <Pad>
+      <div className="ow-inline" style={{ alignItems: 'flex-start', gap: '16px' }}>
+        <PageHeader
+          title="Ingest health"
+          sub={
+            <>
+              MDP keeps one day of data at best. Supabase is the system of record — an event we fail
+              to persist is gone for good.
+            </>
+          }
+        />
+        <div style={{ marginLeft: 'auto' }}>
+          <TabPills
+            label="Window"
+            items={[
+              { href: '/admin/ingest?window=24', label: '24 hours', active: windowHours === 24 },
+              { href: '/admin/ingest?window=168', label: '7 days', active: windowHours === 168 },
+            ]}
+          />
+        </div>
+      </div>
+
+      <KpiGrid>
         <Stat
           label="Events in window"
           value={rate.total.toLocaleString('en-US')}
@@ -102,34 +139,40 @@ export default async function IngestPage({
           tone={budget.approachingCap ? 'wrong' : 'plain'}
           note={`${budget.plan} plan · ${budget.deviceCount} devices`}
         />
-      </div>
+      </KpiGrid>
 
       <Panel
         title="Raw event rate"
-        note={`Every envelope that reached the database, bucketed by arrival. Charts use received_at, never the envelope clock.`}
+        note="Every envelope that reached the database, bucketed by arrival. Charts use received_at, never the envelope clock."
       >
         <RateChart rate={rate} />
       </Panel>
 
       <Panel
         title="Webhook rejections"
-        note="What the database can and cannot tell you about refused deliveries."
+        note={
+          <>
+            What the database can and cannot tell you about refused deliveries. {EDGE_LOG_HINT}
+          </>
+        }
       >
-        <dl className="divide-y divide-hairline text-sm">
-          <Row label="Normalized" value={rate.totals.normalized.toLocaleString('en-US')} />
-          <Row label="Ignored (acknowledged, no data)" value={rate.totals.ignored.toLocaleString('en-US')} />
-          <Row
+        <Facts>
+          <FactRow label="Normalized" value={rate.totals.normalized.toLocaleString('en-US')} />
+          <FactRow
+            label="Ignored (acknowledged, no data)"
+            value={rate.totals.ignored.toLocaleString('en-US')}
+          />
+          <FactRow
             label="Dead-lettered"
             value={rate.totals.dead_letter.toLocaleString('en-US')}
-            wrong={rate.totals.dead_letter > 0}
+            tone={rate.totals.dead_letter > 0 ? 'wrong' : 'plain'}
           />
-          <Row
+          <FactRow
             label="Still pending"
             value={rate.totals.pending.toLocaleString('en-US')}
-            wrong={rate.totals.pending > 0}
+            tone={rate.totals.pending > 0 ? 'wrong' : 'plain'}
           />
-        </dl>
-        <p className="border-t border-hairline px-4 py-3 text-xs text-muted">{EDGE_LOG_HINT}</p>
+        </Facts>
       </Panel>
 
       <Panel
@@ -137,26 +180,30 @@ export default async function IngestPage({
         note="Normalization failures. The raw envelope survived, so every one of these is replayable until retention drops it."
       >
         {dlq.open.length === 0 ? (
-          <Empty>Nothing waiting. Every envelope that arrived either normalized or was ignored.</Empty>
+          <Empty>
+            Nothing waiting. Every envelope that arrived either normalized or was ignored.
+          </Empty>
         ) : (
-          <ul className="divide-y divide-hairline">
+          <ul>
             {dlq.open.map((row) => (
-              <li key={row.id} className="space-y-2 px-4 py-3">
-                <div className="flex flex-wrap items-baseline justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm text-alert">{row.error}</p>
-                    <p className="machine mt-0.5 text-xs text-muted">
+              <li key={row.id} className="ow-listitem">
+                <div className="ow-inline" style={{ alignItems: 'flex-start' }}>
+                  <div style={{ minWidth: 0, flex: '1 1 20rem' }}>
+                    <p className="ow-body ow-wrong">{row.error}</p>
+                    <p className="ow-quiet ow-machine">
                       {row.farmName} · {shortDateTime(row.createdAt)}
                       {row.mdpEventId ? ` · ${row.mdpEventId}` : ''}
                       {row.retryCount > 0 ? ` · ${row.retryCount} retries` : ''}
                     </p>
                   </div>
-                  <RetryForm deadLetterId={row.id} orgId={row.orgId} farmId={row.farmId} />
+                  <div style={{ marginLeft: 'auto', flex: 'none' }}>
+                    <RetryForm deadLetterId={row.id} orgId={row.orgId} farmId={row.farmId} />
+                  </div>
                 </div>
                 {row.errorDetail != null && (
-                  <details className="text-xs">
-                    <summary className="cursor-pointer text-muted">Error detail</summary>
-                    <pre className="machine mt-1 max-h-40 overflow-auto rounded border border-hairline bg-background p-2 text-faint">
+                  <details className="ow-disc" style={{ marginTop: '9px' }}>
+                    <summary>Error detail</summary>
+                    <pre className="ow-code ow-pre" style={{ marginTop: '7px' }}>
                       {JSON.stringify(row.errorDetail, null, 2)}
                     </pre>
                   </details>
@@ -168,46 +215,14 @@ export default async function IngestPage({
       </Panel>
 
       <Panel title="By farm" note="Last envelope received, per farm.">
-        {farms.length === 0 ? (
-          <Empty>No farms yet.</Empty>
-        ) : (
-          <ul className="divide-y divide-hairline">
-            {farms.map((farm) => {
-              const silent = farm.lastEventAt === null;
-              return (
-                <li
-                  key={farm.farmId}
-                  className="flex flex-wrap items-baseline justify-between gap-3 px-4 py-2"
-                >
-                  <Link
-                    href={`/admin/farms/${farm.farmId}`}
-                    className="text-sm text-foreground transition-colors hover:text-accent"
-                  >
-                    {farm.farmName}
-                  </Link>
-                  <span className="flex items-center gap-2">
-                    {!farm.webhookConfigured && <Chip tone="wrong">no application</Chip>}
-                    <span
-                      className={`machine text-xs ${silent ? 'text-alert' : 'text-muted'}`}
-                    >
-                      {relativeTime(farm.lastEventAt)}
-                    </span>
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <DataTable
+          caption="Last envelope received, per farm"
+          columns={farmColumns}
+          rows={farms}
+          rowKey={(row) => row.farmId}
+          empty="No farms yet."
+        />
       </Panel>
-    </div>
-  );
-}
-
-function Row({ label, value, wrong }: { label: string; value: string; wrong?: boolean }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3 px-4 py-2">
-      <dt className="text-xs text-muted">{label}</dt>
-      <dd className={`machine text-xs ${wrong ? 'text-alert' : 'text-foreground'}`}>{value}</dd>
-    </div>
+    </Pad>
   );
 }

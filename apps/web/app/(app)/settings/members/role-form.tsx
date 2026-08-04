@@ -1,27 +1,18 @@
-"use client";
+'use client';
 
-import { useActionState } from "react";
-import type { MemberRole } from "@/lib/auth/claims";
-import { updateMemberRole, type RoleFormState } from "./actions";
+import { useActionState } from 'react';
+import type { MemberRole } from '@/lib/auth/claims';
+import { updateMemberRole, type RoleFormState } from './actions';
 
-const initialState: RoleFormState = { status: "idle", message: "" };
+const initialState: RoleFormState = { status: 'idle', message: '' };
 
-const ROLES: readonly MemberRole[] = ["owner", "manager", "crew", "viewer"];
+const ROLES: readonly MemberRole[] = ['owner', 'manager', 'crew', 'viewer'];
 
-export function RoleForm({
-  userId,
-  role,
-}: {
-  userId: string;
-  role: MemberRole;
-}) {
-  const [state, formAction, pending] = useActionState(
-    updateMemberRole,
-    initialState,
-  );
+export function RoleForm({ userId, role }: { userId: string; role: MemberRole }) {
+  const [state, formAction, pending] = useActionState(updateMemberRole, initialState);
 
   return (
-    <form action={formAction} className="flex items-center gap-2">
+    <form action={formAction} className="ow-inline">
       <input type="hidden" name="userId" value={userId} />
       <label className="sr-only" htmlFor={`role-${userId}`}>
         Role
@@ -30,7 +21,7 @@ export function RoleForm({
         id={`role-${userId}`}
         name="role"
         defaultValue={role}
-        className="machine rounded border border-hairline bg-background px-2 py-1 text-xs text-foreground focus:border-accent focus:outline-none"
+        className="ow-input mono w-sm"
       >
         {ROLES.map((r) => (
           <option key={r} value={r}>
@@ -38,19 +29,11 @@ export function RoleForm({
           </option>
         ))}
       </select>
-      <button
-        type="submit"
-        disabled={pending}
-        className="rounded border border-hairline px-2 py-1 text-xs text-foreground transition-colors hover:border-accent hover:text-accent disabled:opacity-60"
-      >
-        {pending ? "Saving…" : "Save role"}
+      <button type="submit" disabled={pending} className="ow-btn sm">
+        {pending ? 'Saving…' : 'Save role'}
       </button>
-      {state.status === "error" && (
-        <span className="text-xs text-alert">{state.message}</span>
-      )}
-      {state.status === "saved" && (
-        <span className="text-xs text-accent">{state.message}</span>
-      )}
+      {state.status === 'error' && <span className="ow-msg err">{state.message}</span>}
+      {state.status === 'saved' && <span className="ow-msg ok">{state.message}</span>}
     </form>
   );
 }

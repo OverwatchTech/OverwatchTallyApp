@@ -1,0 +1,194 @@
+/*
+  ============================================================================
+  Form controls for the map's two setup flows (boundary, KML import)
+  ============================================================================
+
+  The mockup is a read-only instrument panel: it has `.btn` and one `<textarea>`
+  in the export box, and no form language beyond that. These controls are that
+  textarea's treatment generalised — `#0b0e12` well, `--line2` hairline, 9px
+  radius, `--ok` focus ring — so a field reads as part of the same instrument
+  rather than a browser default.
+
+  Namespaced `ow-` and written to be lifted into globals.css when the
+  coordinator promotes it; nothing here is specific to either route, which is
+  why the KML import flow imports this file across the directory boundary
+  instead of restating it.
+  ============================================================================
+*/
+
+.ow-field {
+  display: block;
+  margin-bottom: 12px;
+}
+.ow-field:last-child {
+  margin-bottom: 0;
+}
+.ow-field > .k {
+  display: block;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+
+.ow-input,
+.ow-select,
+.ow-file {
+  width: 100%;
+  background: #0b0e12;
+  border: 1px solid var(--line2);
+  border-radius: 9px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 8px 10px;
+}
+.ow-input::placeholder {
+  color: var(--ink3);
+}
+.ow-input:focus-visible,
+.ow-select:focus-visible,
+.ow-file:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: -1px;
+}
+.ow-select {
+  cursor: pointer;
+}
+.ow-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ow-select.inline {
+  width: auto;
+  min-width: 130px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+.ow-file {
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.ow-file::file-selector-button {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 10px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line2);
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+.ow-file::file-selector-button:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+/* Button row under a form body. */
+.ow-formrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ow-formrow .sep {
+  font-size: 11.5px;
+  color: var(--ink3);
+}
+
+/* Prose inside a card body — the explanations these screens carry. */
+.ow-prose {
+  font-size: 12.5px;
+  color: var(--ink2);
+  line-height: 1.6;
+}
+.ow-prose + .ow-prose {
+  margin-top: 8px;
+}
+.ow-prose b {
+  color: var(--ink);
+}
+.ow-prose.faint {
+  color: var(--ink3);
+}
+
+/* Inline form feedback. `crit` only when something is actually wrong. */
+.ow-formmsg {
+  font-size: 12.5px;
+  color: var(--ink2);
+  line-height: 1.55;
+}
+.ow-formmsg.crit {
+  color: var(--crit);
+}
+.ow-formmsg.ok {
+  color: var(--ok);
+}
+
+/* Checkbox rows — the parcel picker. Same rhythm as `.ow-arow`. */
+.ow-pick {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 17px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.ow-pick:last-child {
+  border-bottom: none;
+}
+.ow-pick:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.ow-pick input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--ok);
+  flex: none;
+  cursor: pointer;
+}
+.ow-pick .id {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  font-weight: 600;
+}
+.ow-pick .sz {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  color: var(--ink2);
+}
+
+/* A single headline measure inside a card — "≈ 54 acres". */
+.ow-bignum {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.ow-bignum + .ow-prose {
+  margin-top: 4px;
+}
+
+/* Quiet list of names — the skipped-features roll-up. */
+.ow-namelist {
+  margin-top: 8px;
+  max-height: 190px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  color: var(--ink2);
+  line-height: 1.8;
+}

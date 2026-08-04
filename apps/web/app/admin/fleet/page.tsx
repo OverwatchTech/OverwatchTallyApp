@@ -4,6 +4,7 @@
 // things MDP cannot, because they need our history rather than a snapshot, and
 // every operational action deep-links out.
 import Link from 'next/link';
+import { DataTable, KpiGrid, Pad, PageHeader, type DataTableColumn } from '@overwatch/ui';
 import { requireStaff } from '@/lib/admin/guard';
 import { recordStaffAction } from '@/lib/admin/audit';
 import {
@@ -12,8 +13,9 @@ import {
   SILENCE_MULTIPLE,
   TRAJECTORY_DAYS,
   readFleet,
+  type FleetRow,
 } from '@/lib/admin/fleet';
-import { Chip, Empty, Panel, Stat, buttonClass } from '@/lib/admin/ui';
+import { Chip, Empty, Panel, Stat, buttonClass } from '../console-ui';
 import { duration, relativeTime } from '@/lib/admin/time';
 import { formatDevEui } from '@/lib/admin/dev-eui';
 
@@ -31,28 +33,90 @@ export default async function FleetPage() {
   );
   const ranked = fleet.filter((row) => row.truckRollScore > 0);
 
+  const batteryColumns: Array<DataTableColumn<FleetRow>> = [
+    { key: 'device', header: 'Device', mono: true, cell: (row) => row.devEui },
+    { key: 'farm', header: 'Farm', cell: (row) => row.farmName },
+    {
+      key: 'battery',
+      header: 'Battery',
+      mono: true,
+      align: 'right',
+      cell: (row) => (row.batteryPct === null ? '—' : `${Math.round(row.batteryPct)}%`),
+    },
+    {
+      key: 'slope',
+      header: 'Per day',
+      mono: true,
+      align: 'right',
+      cell: (row) =>
+        row.trajectory.slopePctPerDay === null
+          ? '—'
+          : `${row.trajectory.slopePctPerDay.toFixed(2)}%`,
+    },
+    {
+      key: 'floor',
+      header: `To ${BATTERY_FLOOR_PCT}%`,
+      mono: true,
+      align: 'right',
+      // A fitted days-to-floor IS a projection, so it is the one hay value
+      // on this screen (CLAUDE.md #4). The battery percentage beside it is a
+      // measurement and stays plain.
+      cellClassName: 'ow-hay-cell',
+      cell: (row) => (row.trajectory.daysToFloor === null ? '—' : `${row.trajectory.daysToFloor}d`),
+    },
+    {
+      key: 'samples',
+      header: 'Samples',
+      mono: true,
+      align: 'right',
+      cell: (row) => <span className="ow-quiet">{row.trajectory.samples}</span>,
+    },
+  ];
+
+  const silentColumns: Array<DataTableColumn<FleetRow>> = [
+    { key: 'device', header: 'Device', mono: true, cell: (row) => formatDevEui(row.devEui) },
+    { key: 'farm', header: 'Farm', cell: (row) => row.farmName },
+    {
+      key: 'quiet',
+      header: 'Quiet for',
+      mono: true,
+      align: 'right',
+      cell: (row) => <span className="ow-wrong">{duration(row.silence.quietSeconds)}</span>,
+    },
+    {
+      key: 'expects',
+      header: 'Expects',
+      mono: true,
+      align: 'right',
+      cell: (row) => duration(row.expectedIntervalS),
+    },
+  ];
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="type-display text-xl">Fleet</h1>
-          <p className="mt-2 max-w-prose text-sm text-muted">
-            Only what MDP cannot show. Status, alarms, logs, bulk config, and OTA all live in
-            Milesight&rsquo;s console — this is battery trend, unexpected silence, and where a truck
-            should go.
-          </p>
-        </div>
+    <Pad>
+      <div className="ow-inline" style={{ alignItems: 'flex-start', gap: '16px' }}>
+        <PageHeader
+          title="Fleet"
+          sub={
+            <>
+              Only what MDP cannot show. Status, alarms, logs, bulk config, and OTA all live in
+              Milesight&rsquo;s console — this is battery trend, unexpected silence, and where a
+              truck should go.
+            </>
+          }
+        />
         <a
           href={MDP_CONSOLE_URL}
           target="_blank"
           rel="noreferrer noopener"
           className={buttonClass()}
+          style={{ marginLeft: 'auto' }}
         >
           MDP console
         </a>
-      </header>
+      </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <KpiGrid>
         <Stat label="Devices tracked" value={fleet.length} note="retired excluded" />
         <Stat
           label="Silent"
@@ -66,7 +130,7 @@ export default async function FleetPage() {
           tone="projected"
           note={`fitted over ${TRAJECTORY_DAYS} days of our history`}
         />
-      </div>
+      </KpiGrid>
 
       <Panel
         title="Truck-roll ranking"
@@ -75,33 +139,37 @@ export default async function FleetPage() {
         {ranked.length === 0 ? (
           <Empty>Nothing is trending toward a site visit.</Empty>
         ) : (
-          <ul className="divide-y divide-hairline">
+          <ul>
             {ranked.map((row) => (
-              <li key={row.deviceId} className="flex flex-wrap items-start gap-3 px-4 py-3">
-                <Chip tone={row.truckRollScore >= 40 ? 'wrong' : 'plain'}>{row.truckRollScore}</Chip>
-                <div className="min-w-0 flex-1">
-                  <p className="machine text-xs text-foreground">
-                    {formatDevEui(row.devEui)}{' '}
-                    <span className="text-muted">
-                      {row.model} · {row.roleLabel}
-                    </span>
-                  </p>
-                  <p className="text-xs text-muted">
-                    <Link
-                      href={`/admin/farms/${row.farmId}`}
-                      className="transition-colors hover:text-accent"
-                    >
-                      {row.farmName}
-                    </Link>
-                    {' — '}
-                    {row.reasons.length > 0 ? row.reasons.join(' · ') : 'no flags'}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="machine text-xs text-foreground">
-                    {row.batteryPct === null ? '—' : `${Math.round(row.batteryPct)}%`}
-                  </p>
-                  <p className="machine text-xs text-muted">{relativeTime(row.lastSeenAt)}</p>
+              <li key={row.deviceId} className="ow-listitem tight">
+                <div className="ow-inline" style={{ alignItems: 'flex-start' }}>
+                  <Chip tone={row.truckRollScore >= 40 ? 'wrong' : 'plain'}>
+                    {row.truckRollScore}
+                  </Chip>
+                  <div style={{ minWidth: 0, flex: '1 1 16rem' }}>
+                    <p className="ow-body ow-machine" style={{ fontSize: '12px' }}>
+                      {formatDevEui(row.devEui)}{' '}
+                      <span className="ow-quiet">
+                        {row.model} · {row.roleLabel}
+                      </span>
+                    </p>
+                    <p className="ow-quiet">
+                      <Link href={`/admin/farms/${row.farmId}`} className="ow-live">
+                        {row.farmName}
+                      </Link>
+                      {' — '}
+                      {row.reasons.length > 0 ? row.reasons.join(' · ') : 'no flags'}
+                    </p>
+                  </div>
+                  <div
+                    className="ow-machine"
+                    style={{ marginLeft: 'auto', textAlign: 'right', flex: 'none' }}
+                  >
+                    <p className="ow-body" style={{ fontSize: '12px' }}>
+                      {row.batteryPct === null ? '—' : `${Math.round(row.batteryPct)}%`}
+                    </p>
+                    <p className="ow-quiet">{relativeTime(row.lastSeenAt)}</p>
+                  </div>
                 </div>
               </li>
             ))}
@@ -111,85 +179,30 @@ export default async function FleetPage() {
 
       <Panel
         title="Battery trajectory"
-        note={`Theil-Sen slope over the daily rollup. A battery swap is a step up, and the median of pairwise slopes ignores it where a regression line would report the battery charging.`}
+        note="Theil-Sen slope over the daily rollup. A battery swap is a step up, and the median of pairwise slopes ignores it where a regression line would report the battery charging."
       >
-        {fleet.length === 0 ? (
-          <Empty>No devices yet.</Empty>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[40rem] text-left text-xs">
-              <thead className="border-b border-hairline text-muted">
-                <tr>
-                  <th scope="col" className="px-4 py-2 font-normal">
-                    Device
-                  </th>
-                  <th scope="col" className="px-4 py-2 font-normal">
-                    Farm
-                  </th>
-                  <th scope="col" className="px-4 py-2 text-right font-normal">
-                    Battery
-                  </th>
-                  <th scope="col" className="px-4 py-2 text-right font-normal">
-                    Per day
-                  </th>
-                  <th scope="col" className="px-4 py-2 text-right font-normal">
-                    To {BATTERY_FLOOR_PCT}%
-                  </th>
-                  <th scope="col" className="px-4 py-2 text-right font-normal">
-                    Samples
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-hairline">
-                {fleet.map((row) => (
-                  <tr key={row.deviceId}>
-                    <td className="machine px-4 py-2 text-foreground">{row.devEui}</td>
-                    <td className="px-4 py-2 text-muted">{row.farmName}</td>
-                    <td className="machine px-4 py-2 text-right text-foreground">
-                      {row.batteryPct === null ? '—' : `${Math.round(row.batteryPct)}%`}
-                    </td>
-                    <td className="machine px-4 py-2 text-right text-muted">
-                      {row.trajectory.slopePctPerDay === null
-                        ? '—'
-                        : `${row.trajectory.slopePctPerDay.toFixed(2)}%`}
-                    </td>
-                    <td className="machine px-4 py-2 text-right text-hay">
-                      {row.trajectory.daysToFloor === null ? '—' : `${row.trajectory.daysToFloor}d`}
-                    </td>
-                    <td className="machine px-4 py-2 text-right text-faint">
-                      {row.trajectory.samples}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <DataTable
+          caption="Battery percentage and fitted trajectory, per device"
+          columns={batteryColumns}
+          rows={fleet}
+          rowKey={(row) => row.deviceId}
+          maxHeight={460}
+          empty="No devices yet."
+        />
       </Panel>
 
       <Panel
         title="Silent longer than expected"
         note="Not the same as offline. This is a device reporting slower than its own configured interval."
       >
-        {silent.length === 0 ? (
-          <Empty>Every device is reporting on schedule.</Empty>
-        ) : (
-          <ul className="divide-y divide-hairline">
-            {silent.map((row) => (
-              <li
-                key={row.deviceId}
-                className="flex flex-wrap items-baseline justify-between gap-3 px-4 py-2"
-              >
-                <span className="machine text-xs text-foreground">{formatDevEui(row.devEui)}</span>
-                <span className="machine text-xs text-alert">
-                  quiet {duration(row.silence.quietSeconds)} · expects{' '}
-                  {duration(row.expectedIntervalS)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
+        <DataTable
+          caption="Devices reporting slower than their own configured interval"
+          columns={silentColumns}
+          rows={silent}
+          rowKey={(row) => row.deviceId}
+          empty="Every device is reporting on schedule."
+        />
       </Panel>
-    </div>
+    </Pad>
   );
 }

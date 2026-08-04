@@ -4,7 +4,7 @@
 // of them is a cross-tenant write.
 import { useActionState } from 'react';
 import { IDLE } from '@/lib/admin/action-state';
-import { Field, FormNote, buttonClass, inputClass } from '@/lib/admin/ui';
+import { Field, FormNote, buttonClass, inputClass } from '../../console-ui';
 import { IMPERSONATION_MINUTES, MIN_REASON_LENGTH } from '@/lib/admin/impersonation';
 import {
   addFarm,
@@ -20,7 +20,7 @@ export function StartSessionForm({ orgId }: { orgId: string }) {
   const [state, formAction, pending] = useActionState(startSupportSession, IDLE);
 
   return (
-    <form action={formAction} className="space-y-3 p-4">
+    <form action={formAction} className="ow-form">
       <input type="hidden" name="orgId" value={orgId} />
       <Field label="Why are you opening this account?" hint={reasonHint}>
         <input
@@ -31,7 +31,7 @@ export function StartSessionForm({ orgId }: { orgId: string }) {
           placeholder="Ticket 412 — trough readings stopped Tuesday"
         />
       </Field>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="ow-inline">
         <button type="submit" disabled={pending} className={buttonClass(true)}>
           {pending ? 'Opening…' : `Start ${IMPERSONATION_MINUTES}-minute session`}
         </button>
@@ -46,19 +46,19 @@ export function OrgStatusForm({ orgId, status }: { orgId: string; status: string
   const next = status === 'suspended' ? 'active' : 'suspended';
 
   return (
-    <form action={formAction} className="space-y-3 p-4">
+    <form action={formAction} className="ow-form">
       <input type="hidden" name="orgId" value={orgId} />
       <input type="hidden" name="status" value={next} />
       <Field label="Why" hint={reasonHint}>
         <input name="reason" required minLength={MIN_REASON_LENGTH} className={inputClass} />
       </Field>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="ow-inline">
         <button type="submit" disabled={pending} className={buttonClass()}>
           {next === 'suspended' ? 'Suspend account' : 'Reinstate account'}
         </button>
         <FormNote status={state.status} message={state.message} />
       </div>
-      <p className="text-xs text-faint">
+      <p className="ow-quiet">
         Suspending stops writes and alerts. Ingest keeps running — data is never dropped over a
         billing state.
       </p>
@@ -70,9 +70,9 @@ export function AddFarmForm({ orgId }: { orgId: string }) {
   const [state, formAction, pending] = useActionState(addFarm, IDLE);
 
   return (
-    <form action={formAction} className="space-y-3 p-4">
+    <form action={formAction} className="ow-form">
       <input type="hidden" name="orgId" value={orgId} />
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="ow-fgrid">
         <Field label="Farm name">
           <input name="farmName" required className={inputClass} />
         </Field>
@@ -83,7 +83,7 @@ export function AddFarmForm({ orgId }: { orgId: string }) {
       <Field label="Why" hint={reasonHint}>
         <input name="reason" required minLength={MIN_REASON_LENGTH} className={inputClass} />
       </Field>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="ow-inline">
         <button type="submit" disabled={pending} className={buttonClass()}>
           {pending ? 'Adding…' : 'Add farm'}
         </button>
@@ -107,7 +107,7 @@ export function FarmStatusForm({
   const [state, formAction, pending] = useActionState(setFarmStatus, IDLE);
 
   return (
-    <form action={formAction} className="flex flex-wrap items-end gap-2">
+    <form action={formAction} className="ow-frow mid">
       <input type="hidden" name="orgId" value={orgId} />
       <input type="hidden" name="farmId" value={farmId} />
       <label className="sr-only" htmlFor={`status-${farmId}`}>
@@ -117,7 +117,7 @@ export function FarmStatusForm({
         id={`status-${farmId}`}
         name="status"
         defaultValue={status}
-        className="machine rounded border border-hairline bg-background px-2 py-1 text-xs text-foreground focus:border-accent focus:outline-none"
+        className="ow-input mono w-sm"
       >
         {FARM_STATUSES.map((value) => (
           <option key={value} value={value}>
@@ -130,7 +130,7 @@ export function FarmStatusForm({
         required
         minLength={MIN_REASON_LENGTH}
         placeholder="why"
-        className="w-40 rounded border border-hairline bg-background px-2 py-1 text-xs text-foreground placeholder:text-faint focus:border-accent focus:outline-none"
+        className="ow-input w-md"
       />
       <button type="submit" disabled={pending} className={buttonClass()}>
         Save
@@ -146,17 +146,17 @@ export function AttachMemberForm({ orgId }: { orgId: string }) {
   const [state, formAction, pending] = useActionState(attachMember, IDLE);
 
   return (
-    <form action={formAction} className="space-y-3 p-4">
+    <form action={formAction} className="ow-form">
       <input type="hidden" name="orgId" value={orgId} />
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="ow-fgrid">
         <Field
           label="User id"
           hint="From Supabase Auth. The customer signs in once first — we cannot create logins from here."
         >
-          <input name="userId" required className={`${inputClass} machine`} />
+          <input name="userId" required className={`${inputClass} mono`} />
         </Field>
         <Field label="Role">
-          <select name="role" defaultValue="owner" className={`${inputClass} machine`}>
+          <select name="role" defaultValue="owner" className={`${inputClass} mono`}>
             {MEMBER_ROLES.map((role) => (
               <option key={role} value={role}>
                 {role}
@@ -168,7 +168,7 @@ export function AttachMemberForm({ orgId }: { orgId: string }) {
       <Field label="Why" hint={reasonHint}>
         <input name="reason" required minLength={MIN_REASON_LENGTH} className={inputClass} />
       </Field>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="ow-inline">
         <button type="submit" disabled={pending} className={buttonClass()}>
           {pending ? 'Attaching…' : 'Attach login'}
         </button>

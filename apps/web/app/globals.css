@@ -1,29 +1,83 @@
 @import 'tailwindcss';
 
 /*
-  Part Five tokens, dark instrument panel. The color rule is semantic
-  (CLAUDE.md #4): teal = live data / positive state / primary action;
-  alert = something is actually wrong, never decorative; hay = projections
-  ONLY (the days-of-feed estimate); water = liquid measurement ONLY.
+  ============================================================================
+  Overwatch Tally — design system
+  ============================================================================
+
+  The authority is docs/reference/portal-mockup.html. Every value in the
+  :root block below is copied verbatim from that file's :root; every .ow-*
+  class below is that file's CSS with a namespace prefix so it cannot collide
+  with Tailwind utilities or with the classes the pre-mockup screens still
+  use while the conversion is in flight.
+
+  The color rule is semantic (CLAUDE.md #4) and unchanged:
+    --ok    teal   live data, positive state, primary action
+    --crit  red    something is actually wrong, never decorative
+    --hay   gold   projections ONLY
+    --water blue   liquid measurement ONLY
+    --sel   blue   the current selection ONLY
+  ============================================================================
 */
+
 :root {
-  --background: #0b0e12;
-  --card: #171c23;
-  --foreground: #f7f8f5;
-  --muted: rgba(247, 248, 245, 0.55);
-  --faint: rgba(247, 248, 245, 0.35);
-  --hairline: rgba(247, 248, 245, 0.1);
-  --accent: #2dd4a7;
-  --accent-deep: #0e8f6f;
-  --navy: #16233f;
-  --alert: #ff5c38;
+  /* --- mockup :root, verbatim ------------------------------------------ */
+  --bg: #0b0e12;
+  --bg2: #0f1319;
+  --panel: rgba(23, 28, 35, 0.92);
+  --panel-solid: #171c23;
+  --card: #151a21;
+  --line: rgba(255, 255, 255, 0.07);
+  --line2: rgba(255, 255, 255, 0.13);
+  --ink: #eaeef2;
+  --ink2: #9aa5b0;
+  --ink3: #5d6873;
+  --ok: #2dd4a7;
+  --warn: #f5a623;
+  --crit: #ff5c38;
+  --off: #8b939b;
+  --sel: #4da3ff;
   --hay: #e8b64c;
   --water: #4fb3d9;
+  --truck: #ffc24d;
+  --mono: var(--font-ibm-plex-mono), ui-monospace, monospace;
+
+  /* --- pre-mockup aliases, kept so unconverted screens still render ---- */
+  /* Converters: prefer --ink/--ink2/--ink3 and --line/--line2 over these. */
+  --background: var(--bg);
+  --foreground: var(--ink);
+  --muted: var(--ink2);
+  --faint: var(--ink3);
+  --hairline: var(--line);
+  --accent: var(--ok);
+  --accent-deep: #0e8f6f;
+  --navy: #16233f;
+  --alert: var(--crit);
 }
 
 @theme inline {
-  --color-background: var(--background);
+  /* mockup tokens as Tailwind colors */
+  --color-bg: var(--bg);
+  --color-bg2: var(--bg2);
+  --color-panel: var(--panel);
+  --color-panel-solid: var(--panel-solid);
   --color-card: var(--card);
+  --color-line: var(--line);
+  --color-line2: var(--line2);
+  --color-ink: var(--ink);
+  --color-ink2: var(--ink2);
+  --color-ink3: var(--ink3);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-crit: var(--crit);
+  --color-off: var(--off);
+  --color-sel: var(--sel);
+  --color-hay: var(--hay);
+  --color-water: var(--water);
+  --color-truck: var(--truck);
+
+  /* pre-mockup names, still mapped so existing utility classes keep working */
+  --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-faint: var(--faint);
@@ -32,37 +86,981 @@
   --color-accent-deep: var(--accent-deep);
   --color-navy: var(--navy);
   --color-alert: var(--alert);
-  --color-hay: var(--hay);
-  --color-water: var(--water);
-  --font-sans: var(--font-inter-tight), system-ui, sans-serif;
-  --font-display: var(--font-archivo), var(--font-inter-tight), system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+
+  --font-sans: var(--font-instrument-sans), system-ui, sans-serif;
+  --font-display: var(--font-instrument-sans), system-ui, sans-serif;
+  --font-mono: var(--font-ibm-plex-mono), ui-monospace, monospace;
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-inter-tight), system-ui, sans-serif;
-}
-
-/* Display type: Archivo with the width axis opened up. */
-.type-display {
-  font-family: var(--font-archivo), var(--font-inter-tight), system-ui, sans-serif;
-  font-variation-settings: 'wdth' 125;
-  letter-spacing: 0.01em;
-}
-
-/* Machine-produced values: JetBrains Mono, tabular figures (CLAUDE.md #11). */
-.machine {
-  font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
-  font-variant-numeric: tabular-nums;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-instrument-sans), system-ui, sans-serif;
+  font-size: 13.5px;
 }
 
 /*
-  Telemetry Rail value swap: a live value that just changed fades in.
-  tabular-nums + fixed rail width mean the swap never reflows layout;
-  reduced motion turns the fade off entirely.
+  The shell owns the scroll: when AppShell is on the page the document does
+  not scroll, the view scrolls inside it. Scoped with :has() so screens that
+  have not been converted yet still scroll normally.
 */
+body:has(.ow-app) {
+  overflow: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Display type: Instrument Sans at its heaviest, tight. */
+.type-display {
+  font-family: var(--font-instrument-sans), system-ui, sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+/* Machine-produced values: mono, tabular figures (CLAUDE.md #11). */
+.machine {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   Shell
+   ========================================================================== */
+
+.ow-app {
+  display: grid;
+  grid-template-rows: 54px 1fr;
+  height: 100vh;
+}
+
+.ow-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 18px;
+  background: var(--panel-solid);
+  border-bottom: 1px solid var(--line);
+  z-index: 40;
+}
+
+.ow-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.ow-brandmark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #2dd4a7, #178f70);
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-size: 14px;
+  color: #062019;
+  font-weight: 800;
+  box-shadow: 0 2px 12px rgba(45, 212, 167, 0.4);
+  flex: none;
+}
+
+.ow-tabs {
+  display: flex;
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 3px;
+}
+
+.ow-tab {
+  padding: 6px 16px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink2);
+  transition: 0.15s;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  display: inline-block;
+}
+.ow-tab:hover {
+  color: var(--ink);
+}
+.ow-tab.on {
+  background: linear-gradient(135deg, #2dd4a7, #1a9e7c);
+  color: #062019;
+  box-shadow: 0 2px 12px rgba(45, 212, 167, 0.3);
+}
+
+.ow-sp {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.ow-stat {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink2);
+  font-variant-numeric: tabular-nums;
+}
+.ow-stat b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.ow-statusdot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--acc, var(--ok));
+  margin-right: 6px;
+  flex: none;
+}
+.ow-statusdot.glow {
+  box-shadow: 0 0 8px var(--acc, var(--ok));
+}
+
+.ow-alertpill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(255, 92, 56, 0.12);
+  border: 1px solid rgba(255, 92, 56, 0.4);
+  border-radius: 99px;
+  padding: 4px 12px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--crit);
+  cursor: pointer;
+  text-decoration: none;
+}
+.ow-alertpill .n {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.ow-view {
+  min-height: 0;
+  overflow: auto;
+  background:
+    radial-gradient(1000px 600px at 75% -10%, rgba(45, 212, 167, 0.05), transparent 60%),
+    radial-gradient(900px 700px at 10% 110%, rgba(77, 163, 255, 0.04), transparent 60%),
+    var(--bg);
+}
+
+.ow-pad {
+  padding: 22px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.ow-pagetitle {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+}
+.ow-pagesub {
+  font-size: 12.5px;
+  color: var(--ink3);
+  margin-bottom: 18px;
+}
+.ow-pagesub b {
+  color: var(--ink2);
+}
+
+/* Farm picker — sits beside the brand mark for multi-farm accounts. */
+.ow-farmpicker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink2);
+  cursor: pointer;
+  transition: 0.15s;
+  max-width: 190px;
+}
+.ow-farmpicker:hover {
+  color: var(--ink);
+  border-color: var(--line2);
+}
+.ow-farmpicker .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ow-farmpicker .cv {
+  color: var(--ink3);
+  font-size: 9px;
+  flex: none;
+}
+
+/* ==========================================================================
+   Kpi
+   ========================================================================== */
+
+.ow-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.ow-kpi {
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 55%),
+    var(--card);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  padding: 14px 16px;
+  overflow: hidden;
+  transition:
+    transform 0.15s,
+    border-color 0.15s;
+}
+.ow-kpi:hover {
+  transform: translateY(-2px);
+  border-color: var(--line2);
+}
+.ow-kpi::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--acc, #3d5568);
+}
+.ow-kpi .l {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  align-items: center;
+}
+.ow-kpi .v {
+  font-family: var(--mono);
+  font-size: 23px;
+  font-weight: 600;
+  margin-top: 6px;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.ow-kpi .v small {
+  font-size: 12px;
+  color: var(--ink3);
+  font-weight: 500;
+}
+.ow-kpi .s {
+  font-size: 11.5px;
+  color: var(--ink2);
+  margin-top: 3px;
+}
+
+.ow-up {
+  color: var(--ok);
+}
+.ow-dn {
+  color: var(--warn);
+}
+
+/* ==========================================================================
+   Badge
+   ========================================================================== */
+
+.ow-badge {
+  font-size: 9.5px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 99px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.ow-badge.ok {
+  background: rgba(45, 212, 167, 0.14);
+  color: var(--ok);
+}
+.ow-badge.warn {
+  background: rgba(245, 166, 35, 0.14);
+  color: var(--warn);
+}
+.ow-badge.crit {
+  background: rgba(255, 92, 56, 0.16);
+  color: var(--crit);
+}
+.ow-badge.neutral {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--ink2);
+}
+
+/* ==========================================================================
+   Layout helpers
+   ========================================================================== */
+
+.ow-cols {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 16px;
+  align-items: start;
+}
+.ow-cols2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1080px) {
+  .ow-cols,
+  .ow-cols2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   Card
+   ========================================================================== */
+
+.ow-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 40%),
+    var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  margin-bottom: 16px;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.ow-card:hover {
+  border-color: var(--line2);
+}
+
+.ow-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 17px;
+  border-bottom: 1px solid var(--line);
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ow-hd h2 {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.ow-hd .sub {
+  font-size: 11.5px;
+  color: var(--ink3);
+  font-weight: 500;
+}
+
+.ow-bd {
+  padding: 16px;
+}
+
+/*
+  The dashed rule is the tell that separates a footnote from a fact.
+  Do not make it solid.
+*/
+.ow-note {
+  font-size: 11.5px;
+  color: var(--ink3);
+  padding: 11px 17px;
+  border-top: 1px dashed var(--line);
+  line-height: 1.55;
+}
+.ow-note b {
+  color: var(--ink2);
+}
+
+.ow-leg {
+  font-size: 11px;
+  color: var(--ink2);
+  display: flex;
+  gap: 13px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.ow-leg i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.ow-leg .ln {
+  display: inline-block;
+  width: 16px;
+  height: 0;
+  border-top: 2.5px dashed var(--sel);
+  margin-right: 5px;
+  vertical-align: 2px;
+}
+
+/* ==========================================================================
+   Callout
+   ========================================================================== */
+
+.ow-callout {
+  display: flex;
+  gap: 13px;
+  align-items: flex-start;
+  border-radius: 13px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  background: linear-gradient(90deg, rgba(255, 92, 56, 0.12), rgba(255, 92, 56, 0.04));
+  border: 1px solid rgba(255, 92, 56, 0.4);
+}
+.ow-callout .ic {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: rgba(255, 92, 56, 0.2);
+  display: grid;
+  place-items: center;
+  color: var(--crit);
+  font-weight: 800;
+  flex: none;
+  font-size: 16px;
+  box-shadow: 0 0 16px rgba(255, 92, 56, 0.25);
+}
+.ow-callout .t {
+  font-size: 12.5px;
+  color: var(--ink2);
+  line-height: 1.6;
+}
+.ow-callout b {
+  color: var(--ink);
+}
+
+.ow-callout.warn {
+  background: linear-gradient(90deg, rgba(245, 166, 35, 0.12), rgba(245, 166, 35, 0.04));
+  border-color: rgba(245, 166, 35, 0.4);
+}
+.ow-callout.warn .ic {
+  background: rgba(245, 166, 35, 0.2);
+  color: var(--warn);
+  box-shadow: 0 0 16px rgba(245, 166, 35, 0.25);
+}
+.ow-callout.ok {
+  background: linear-gradient(90deg, rgba(45, 212, 167, 0.12), rgba(45, 212, 167, 0.04));
+  border-color: rgba(45, 212, 167, 0.4);
+}
+.ow-callout.ok .ic {
+  background: rgba(45, 212, 167, 0.2);
+  color: var(--ok);
+  box-shadow: 0 0 16px rgba(45, 212, 167, 0.25);
+}
+.ow-callout.info {
+  background: linear-gradient(90deg, rgba(77, 163, 255, 0.12), rgba(77, 163, 255, 0.04));
+  border-color: rgba(77, 163, 255, 0.4);
+}
+.ow-callout.info .ic {
+  background: rgba(77, 163, 255, 0.2);
+  color: var(--sel);
+  box-shadow: 0 0 16px rgba(77, 163, 255, 0.25);
+}
+
+/* ==========================================================================
+   DataTable
+   ========================================================================== */
+
+.ow-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.ow-table th {
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+  text-align: left;
+  padding: 9px 17px;
+  border-bottom: 1px solid var(--line);
+}
+.ow-table td {
+  padding: 8.5px 17px;
+  border-bottom: 1px solid var(--line);
+}
+.ow-table tr:last-child td {
+  border-bottom: none;
+}
+.ow-table tbody tr {
+  transition: background 0.12s;
+}
+.ow-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+.ow-table .mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.ow-table .r {
+  text-align: right;
+}
+.ow-tablescroll {
+  overflow: auto;
+}
+
+/* ==========================================================================
+   ActivityRow
+   ========================================================================== */
+
+.ow-arow {
+  display: flex;
+  gap: 10px;
+  padding: 9px 17px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  align-items: center;
+  transition: background 0.12s;
+  width: 100%;
+  text-align: left;
+}
+.ow-arow:last-child {
+  border-bottom: none;
+}
+.ow-arow.clickable {
+  cursor: pointer;
+}
+.ow-arow.clickable:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.ow-arow b {
+  font-weight: 600;
+  color: var(--ink);
+}
+.ow-arow .st {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--acc, var(--ok));
+}
+.ow-arow .v {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink2);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/* dense variant — the mockup's .frow */
+.ow-arow.dense {
+  gap: 9px;
+  padding: 8px 17px;
+  font-size: 11.5px;
+  color: var(--ink2);
+}
+.ow-arow.dense .st {
+  width: 6px;
+  height: 6px;
+}
+.ow-arow.dense .v {
+  font-size: 10px;
+  color: var(--ink3);
+}
+
+/* ==========================================================================
+   Tile
+   ========================================================================== */
+
+.ow-tgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  padding: 14px 17px;
+}
+
+.ow-tile {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 9px;
+  transition: 0.13s;
+  position: relative;
+  overflow: hidden;
+  text-align: left;
+  width: 100%;
+  display: block;
+}
+.ow-tile.clickable {
+  cursor: pointer;
+}
+.ow-tile.clickable:hover {
+  border-color: var(--line2);
+  transform: translateY(-1px);
+}
+.ow-tile .tid {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink2);
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+}
+.ow-tile .lvl {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 600;
+  margin: 3px 0 5px;
+  font-variant-numeric: tabular-nums;
+}
+.ow-tile .bar {
+  height: 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.ow-tile .bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.6s;
+  background: var(--acc, var(--ok));
+}
+.ow-tile.crit {
+  border-color: rgba(255, 92, 56, 0.5);
+  background: rgba(255, 92, 56, 0.06);
+}
+.ow-tile.ovf {
+  border-color: rgba(77, 163, 255, 0.5);
+  background: rgba(77, 163, 255, 0.06);
+}
+.ow-tile.warn {
+  border-color: rgba(245, 166, 35, 0.4);
+}
+.ow-tile.off {
+  opacity: 0.55;
+}
+
+/* ==========================================================================
+   Button
+   ========================================================================== */
+
+.ow-btn {
+  display: inline-block;
+  text-align: center;
+  padding: 8px 10px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--line2);
+  color: var(--ink);
+  background: none;
+  cursor: pointer;
+  transition: 0.12s;
+  text-decoration: none;
+  font-family: inherit;
+}
+.ow-btn:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.ow-btn.pri {
+  background: linear-gradient(135deg, #2dd4a7, #1a9e7c);
+  border-color: transparent;
+  color: #062019;
+}
+.ow-btn.sm {
+  padding: 4px 12px;
+}
+.ow-btn.block {
+  display: block;
+  width: 100%;
+}
+.ow-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   Drawer / Toast / Modal — blurred --panel overlays
+   ========================================================================== */
+
+.ow-drawer {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transform: translateY(-8px) scale(0.98);
+  pointer-events: none;
+  transition: 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+  z-index: 20;
+  overflow: hidden;
+}
+.ow-drawer.on {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+.ow-dh {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--line);
+}
+.ow-dh .st {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+  flex: none;
+  background: currentColor;
+}
+.ow-dh b {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.ow-dh .type {
+  font-size: 10.5px;
+  color: var(--ink3);
+  font-family: var(--mono);
+  margin-left: auto;
+}
+.ow-kv {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--line);
+}
+.ow-kv > div {
+  background: rgba(23, 28, 35, 0.6);
+  padding: 10px 15px;
+}
+.ow-kv .k {
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+}
+.ow-kv .v {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  font-weight: 600;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.ow-dnote {
+  padding: 11px 15px;
+  font-size: 12px;
+  color: var(--ink2);
+  border-top: 1px solid var(--line);
+  line-height: 1.55;
+}
+.ow-acts {
+  display: flex;
+  gap: 8px;
+  padding: 12px 15px;
+  border-top: 1px solid var(--line);
+}
+.ow-acts .ow-btn {
+  flex: 1;
+}
+
+.ow-toasts {
+  position: fixed;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+.ow-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line2);
+  border-radius: 11px;
+  padding: 9px 15px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: 0.28s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.ow-toast.in {
+  opacity: 1;
+  transform: none;
+}
+.ow-toast .td {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+  flex: none;
+  background: currentColor;
+}
+.ow-toast .tt {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink3);
+}
+
+.ow-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 6, 8, 0.74);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  z-index: 80;
+  padding: 20px;
+}
+.ow-modalbox {
+  width: min(580px, 100%);
+  background: var(--panel-solid);
+  border: 1px solid var(--line2);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+  animation: ow-modal-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.ow-modalbox h3 {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.ow-modalrow {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+@keyframes ow-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ow-kpi,
+  .ow-tile,
+  .ow-drawer,
+  .ow-toast,
+  .ow-modalbox {
+    transition: none;
+    animation: none;
+  }
+  .ow-kpi:hover,
+  .ow-tile.clickable:hover {
+    transform: none;
+  }
+}
+
+/* The bar has a hard minimum width: brand + farm picker + four tab pills + the
+   status cluster, all nowrap. Under about 960px that minimum exceeds the
+   viewport. `.ow-app` is a grid and `.ow-bar` is a grid item, so a bar wider
+   than the window widens the whole 100vh shell and the document scrolls
+   sideways — on iPad portrait (768) among others. `overflow-x: auto` makes the
+   bar a scroll container, which gives it an automatic minimum size of 0 and
+   stops it stretching the shell; the bar scrolls inside its own 54px row
+   instead. The tab/gap/padding compaction keeps how much of it is off-screen
+   small (~68px at 768) so the tabs and the farm picker stay fully visible.
+   Do NOT add `min-width: 0` to the bar's flex children to "help this along" —
+   measured, it lets them shrink below their content instead of scrolling, and
+   `.ow-tabs` / `.ow-sp` have visible overflow, so the tab labels spill out of
+   the pill and collide with the alert pill (232px of spill at 375). */
+@media (max-width: 960px) {
+  .ow-bar {
+    gap: 8px;
+    padding: 0 10px;
+    overflow-x: auto;
+  }
+  .ow-tab {
+    padding: 6px 11px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 640px) {
+  .ow-pad {
+    padding: 14px;
+  }
+  .ow-kpis {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 9px;
+  }
+  .ow-kpi .v {
+    font-size: 19px;
+  }
+  .ow-tgrid {
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  }
+}
+
+/* ==========================================================================
+   Telemetry Rail value swap (pre-existing; a live value that just changed
+   fades in — tabular-nums plus a fixed rail width mean it never reflows).
+   ========================================================================== */
+
 @keyframes rail-swap {
   from {
     opacity: 0;
@@ -82,17 +1080,17 @@ body {
   }
 }
 
-/*
-  Farm map surface. Labels are DOM markers so feature names render in the
-  real JetBrains Mono; MapLibre's stock chrome is re-dressed for the dark
-  instrument panel.
-*/
+/* ==========================================================================
+   Farm map surface. Labels are DOM markers so feature names render in the
+   real mono face; MapLibre's stock chrome is re-dressed for the dark panel.
+   ========================================================================== */
+
 .map-label {
   font-size: 10px;
   line-height: 1;
   letter-spacing: 0.02em;
   white-space: nowrap;
-  color: rgba(247, 248, 245, 0.85);
+  color: rgba(234, 238, 242, 0.85);
   text-shadow:
     0 0 4px rgba(11, 14, 18, 0.95),
     0 0 2px rgba(11, 14, 18, 0.95);
@@ -105,18 +1103,18 @@ body {
 }
 
 .maplibregl-canvas:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ok);
   outline-offset: -2px;
 }
 
 .maplibregl-ctrl-group {
-  background: var(--card);
-  border: 1px solid var(--hairline);
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
   box-shadow: none;
 }
 
 .maplibregl-ctrl-group button + button {
-  border-top: 1px solid var(--hairline);
+  border-top: 1px solid var(--line);
 }
 
 .maplibregl-ctrl button .maplibregl-ctrl-icon {
@@ -125,13 +1123,585 @@ body {
 
 .maplibregl-ctrl-attrib {
   background: rgba(11, 14, 18, 0.65);
-  color: var(--muted);
+  color: var(--ink2);
 }
 
 .maplibregl-ctrl-attrib a {
-  color: var(--muted);
+  color: var(--ink2);
 }
 
 .maplibregl-ctrl-attrib-button {
   filter: invert(0.85);
+}
+
+/* ==========================================================================
+   Forms, facts, and console density.
+
+   The mockup has no form controls, no numbered checklist, and no dense
+   admin table — it is a read-only instrument panel. Everything below is
+   DERIVED from a mockup value rather than invented: the input geometry is
+   .btn's (9px radius, --line2 border, 12px/600), the fact row is the table
+   row's (8.5px/17px, hairline rule), the micro-label is .kv .k verbatim.
+   Nothing here introduces a new colour; the semantic rule (CLAUDE.md #4)
+   is untouched.
+
+   Added by the alerts/settings/admin conversion. Promote or re-home freely.
+   ========================================================================== */
+
+/* --- fields ------------------------------------------------------------- */
+
+.ow-field {
+  display: block;
+  min-width: 0;
+}
+.ow-field > .lbl {
+  display: block;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+.ow-field > .hint {
+  display: block;
+  font-size: 11px;
+  color: var(--ink3);
+  margin-top: 5px;
+  line-height: 1.5;
+}
+
+.ow-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line2);
+  border-radius: 9px;
+  padding: 7px 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--ink);
+  transition: border-color 0.12s;
+}
+.ow-input.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.ow-input::placeholder {
+  color: var(--ink3);
+}
+.ow-input:focus {
+  outline: none;
+  border-color: var(--ok);
+}
+.ow-input:disabled {
+  opacity: 0.5;
+}
+select.ow-input {
+  cursor: pointer;
+}
+textarea.ow-input {
+  resize: vertical;
+  line-height: 1.5;
+}
+.ow-input.w-sm {
+  width: 7rem;
+}
+.ow-input.w-md {
+  width: 12rem;
+}
+
+/* A checkbox and its sentence, on one line. */
+.ow-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.ow-check input {
+  accent-color: var(--ok);
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+/* Form scaffolding: a grid of fields, an inline row, a bordered sub-group. */
+.ow-fgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+.ow-frow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+.ow-frow.mid {
+  align-items: center;
+}
+.ow-group {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 13px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.ow-group > legend,
+.ow-group > .gt {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+}
+.ow-form {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 15px 17px;
+}
+.ow-form.bare {
+  padding: 0;
+}
+
+/* The saved/failed line beside a submit button. Never apologises, never
+   vague (CLAUDE.md #11); colour is the only thing this class decides. */
+.ow-msg {
+  font-size: 11.5px;
+  color: var(--ink2);
+}
+.ow-msg.ok {
+  color: var(--ok);
+}
+.ow-msg.err {
+  color: var(--crit);
+}
+
+/* --- fact rows ---------------------------------------------------------- */
+
+/*
+  Label left, machine value right. Same rhythm as a table row so a card can
+  mix the two without the eye catching a seam.
+*/
+.ow-facts {
+  display: block;
+}
+.ow-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8.5px 17px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.ow-facts > div:last-child {
+  border-bottom: none;
+}
+.ow-facts .k {
+  color: var(--ink2);
+}
+.ow-facts .v {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--ink);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ow-facts .v.wrong {
+  color: var(--crit);
+}
+.ow-facts .v.live {
+  color: var(--ok);
+}
+/* Projections only (CLAUDE.md #4). */
+.ow-facts .v.projected {
+  color: var(--hay);
+}
+
+/* .ow-kv, edge to edge inside a card body rather than a drawer. */
+.ow-kv.flat > div {
+  background: rgba(255, 255, 255, 0.02);
+}
+.ow-kv.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+/*
+  Fact count varies per alert — two for a battery, six for a feed forecast.
+  `.kv` draws its hairlines by showing --line through a 1px gap, which means a
+  fixed column count paints an empty track as a grey block whenever there are
+  fewer facts than tracks. Auto-fit collapses the empty tracks, the container
+  goes transparent, and each cell rings itself instead. Same hairline, no
+  block.
+*/
+.ow-kv.auto {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 260px));
+  background: transparent;
+}
+.ow-kv.auto > div {
+  background: rgba(255, 255, 255, 0.02);
+  box-shadow: 0 0 0 1px var(--line);
+}
+/* A third line under the value, for a state that needs a sentence. */
+.ow-kv .d {
+  font-size: 11px;
+  color: var(--ink3);
+  line-height: 1.5;
+  margin-top: 5px;
+}
+@media (max-width: 700px) {
+  .ow-kv.three {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* --- checklist ---------------------------------------------------------- */
+
+.ow-steplist {
+  list-style: none;
+}
+.ow-steplist > li {
+  display: flex;
+  gap: 11px;
+  padding: 10px 17px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.ow-steplist > li:last-child {
+  border-bottom: none;
+}
+.ow-steplist .n {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink3);
+  flex: none;
+  width: 14px;
+  text-align: center;
+}
+.ow-steplist .n.done {
+  color: var(--ok);
+}
+.ow-steplist .done + .tx {
+  color: var(--ink3);
+}
+.ow-steplist .tx {
+  color: var(--ink);
+}
+
+/* --- code / payload ----------------------------------------------------- */
+
+.ow-code {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.ow-code.wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ow-pre {
+  max-height: 15rem;
+  overflow: auto;
+  color: var(--ink2);
+}
+
+/* --- disclosure --------------------------------------------------------- */
+
+.ow-disc > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 11.5px;
+  color: var(--ink2);
+  transition: color 0.12s;
+}
+.ow-disc > summary::-webkit-details-marker {
+  display: none;
+}
+.ow-disc > summary:hover {
+  color: var(--ink);
+}
+.ow-disc[open] > summary {
+  color: var(--ink);
+}
+.ow-disc > summary::after {
+  content: ' \25B8';
+  color: var(--ink3);
+}
+.ow-disc[open] > summary::after {
+  content: ' \25BE';
+}
+
+/* --- one open alert ----------------------------------------------------- */
+
+/*
+  The Callout IS the alert; the card under it is the evidence. They are one
+  object, so the gap between them is smaller than the gap to the next alert.
+*/
+/* TabPills used at page level rather than in the bar: shrink to content. */
+.ow-tabs-inline {
+  display: inline-flex;
+}
+
+.ow-alertitem {
+  display: block;
+}
+.ow-alertitem > .ow-callout {
+  margin-bottom: 8px;
+}
+.ow-alertitem .ow-callout .ow-btn {
+  vertical-align: baseline;
+}
+.ow-alertitem .ow-callout form {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* --- inline banner ------------------------------------------------------ */
+
+/*
+  Full-width strip above the bar. Same wash as .ow-callout so a page-level
+  state and a card-level finding read as the same family.
+*/
+.ow-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 18px;
+  font-size: 11.5px;
+  color: var(--ink);
+  background: linear-gradient(90deg, rgba(255, 92, 56, 0.14), rgba(255, 92, 56, 0.05));
+  border-bottom: 1px solid rgba(255, 92, 56, 0.4);
+}
+.ow-banner .m {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink2);
+}
+.ow-banner .push {
+  margin-left: auto;
+}
+.ow-banner.sticky {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+/*
+  Badge in hay. Projections only (CLAUDE.md #4) — a days-to-floor figure
+  qualifies, a battery percentage does not.
+*/
+.ow-badge.hay {
+  background: rgba(232, 182, 76, 0.14);
+  color: var(--hay);
+}
+
+/* --- console density ---------------------------------------------------- */
+
+/*
+  /admin runs the same system denser (owner's decision). Only geometry
+  changes: same tokens, same rules, tighter rhythm and a smaller pad cap.
+*/
+.ow-console .ow-pad {
+  padding: 16px 18px;
+  max-width: 1440px;
+}
+.ow-console .ow-card {
+  margin-bottom: 12px;
+  border-radius: 12px;
+}
+.ow-console .ow-hd {
+  padding: 10px 15px;
+}
+.ow-console .ow-bd {
+  padding: 13px 15px;
+}
+.ow-console .ow-kpis {
+  gap: 10px;
+  margin-bottom: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+}
+.ow-console .ow-kpi {
+  padding: 11px 13px;
+}
+.ow-console .ow-kpi .v {
+  font-size: 20px;
+}
+.ow-console .ow-table th {
+  padding: 7px 15px;
+}
+.ow-console .ow-table td {
+  padding: 6.5px 15px;
+  font-size: 12px;
+}
+.ow-console .ow-note,
+.ow-console .ow-facts > div {
+  padding-left: 15px;
+  padding-right: 15px;
+}
+.ow-console .ow-form {
+  padding: 13px 15px;
+}
+.ow-console .ow-steplist > li {
+  padding-left: 15px;
+  padding-right: 15px;
+}
+
+/* --- installer handset -------------------------------------------------- */
+
+/*
+  The installer PWA is used one-handed, in a field, in gloves. It opts OUT
+  of console density: 44px targets, 16px text in every input so iOS does
+  not zoom the viewport on focus.
+*/
+.ow-touch .ow-input {
+  font-size: 16px;
+  padding: 11px 12px;
+  border-radius: 10px;
+}
+.ow-touch .ow-btn {
+  padding: 12px 16px;
+  font-size: 14px;
+  border-radius: 11px;
+  min-height: 44px;
+}
+.ow-touch .ow-check {
+  font-size: 14px;
+  padding: 6px 0;
+  min-height: 44px;
+}
+.ow-touch .ow-check input {
+  width: 20px;
+  height: 20px;
+}
+.ow-touch .ow-field > .lbl {
+  font-size: 11px;
+}
+.ow-touch .ow-field > .hint {
+  font-size: 12px;
+}
+.ow-touch .ow-form {
+  gap: 16px;
+}
+/* Opts out of console density even though it renders inside `.ow-console`. */
+.ow-touch.ow-pad {
+  padding: 16px;
+  max-width: 34rem;
+}
+.ow-touch .ow-hd {
+  padding: 13px 15px;
+}
+.ow-touch .ow-bd {
+  padding: 15px;
+}
+
+/* A sticky action bar the thumb can always reach. */
+.ow-stickyact {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 0 14px;
+  background: linear-gradient(180deg, rgba(11, 14, 18, 0.75), var(--bg) 45%);
+  border-top: 1px solid var(--line);
+}
+
+/* --- small shared utilities (geometry only, no colour decisions) -------- */
+
+.ow-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ow-stack.tight {
+  gap: 7px;
+}
+.ow-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+}
+.ow-micro {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+}
+.ow-body {
+  font-size: 12.5px;
+  color: var(--ink2);
+  line-height: 1.6;
+  max-width: 68ch;
+}
+.ow-body b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.ow-quiet {
+  font-size: 11.5px;
+  color: var(--ink3);
+  line-height: 1.55;
+  max-width: 74ch;
+}
+.ow-quiet b {
+  color: var(--ink2);
+}
+.ow-machine {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.ow-wrong {
+  color: var(--crit);
+}
+/* Projections only (CLAUDE.md #4): a fitted days-to-floor, never a reading. */
+.ow-hay-cell {
+  color: var(--hay);
+}
+.ow-live {
+  color: var(--ok);
+}
+.ow-groupbar {
+  padding: 6px 17px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--line);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+}
+.ow-listitem {
+  padding: 11px 17px;
+  border-bottom: 1px solid var(--line);
+}
+.ow-listitem:last-child {
+  border-bottom: none;
+}
+.ow-console .ow-listitem,
+.ow-console .ow-groupbar {
+  padding-left: 15px;
+  padding-right: 15px;
+}
+.ow-listitem.tight {
+  padding-top: 8px;
+  padding-bottom: 8px;
 }

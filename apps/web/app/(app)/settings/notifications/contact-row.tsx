@@ -7,28 +7,23 @@
 // phone number wants to see the rest of the chain while they do it.
 
 import { useActionState, useState } from 'react';
+import { Badge } from '@overwatch/ui';
 
 import { removeContact, setContactEnabled } from './actions';
 import { IDLE } from './form-state';
 import { ContactForm, type ContactDraft, type FarmOption } from './contact-form';
 
-const CHIP = 'machine rounded border px-1.5 py-0.5 text-[10px] leading-none';
-
 function ToggleForm({ ids, enabled }: { ids: string[]; enabled: boolean }) {
   const [state, formAction, pending] = useActionState(setContactEnabled, IDLE);
 
   return (
-    <form action={formAction} className="inline-flex items-center gap-2">
+    <form action={formAction} className="ow-inline">
       <input type="hidden" name="ids" value={ids.join(',')} />
       <input type="hidden" name="enabled" value={enabled ? 'off' : 'on'} />
-      <button
-        type="submit"
-        disabled={pending}
-        className="rounded border border-hairline px-2 py-1 text-xs text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60"
-      >
+      <button type="submit" disabled={pending} className="ow-btn sm">
         {pending ? 'Saving…' : enabled ? 'Turn off' : 'Turn back on'}
       </button>
-      {state.status === 'error' && <span className="text-xs text-alert">{state.message}</span>}
+      {state.status === 'error' && <span className="ow-msg err">{state.message}</span>}
     </form>
   );
 }
@@ -39,35 +34,23 @@ function RemoveForm({ ids, label }: { ids: string[]; label: string }) {
 
   if (!confirming) {
     return (
-      <button
-        type="button"
-        onClick={() => setConfirming(true)}
-        className="rounded border border-hairline px-2 py-1 text-xs text-muted transition-colors hover:border-alert hover:text-alert focus-visible:outline-2 focus-visible:outline-accent"
-      >
+      <button type="button" onClick={() => setConfirming(true)} className="ow-btn sm">
         Remove
       </button>
     );
   }
 
   return (
-    <form action={formAction} className="inline-flex items-center gap-2">
+    <form action={formAction} className="ow-inline">
       <input type="hidden" name="ids" value={ids.join(',')} />
-      <span className="text-xs text-muted">Take {label} off the list?</span>
-      <button
-        type="submit"
-        disabled={pending}
-        className="rounded border border-alert/60 px-2 py-1 text-xs text-alert transition-colors hover:border-alert focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60"
-      >
+      <span className="ow-quiet">Take {label} off the list?</span>
+      <button type="submit" disabled={pending} className="ow-btn sm ow-wrong">
         {pending ? 'Removing…' : 'Remove'}
       </button>
-      <button
-        type="button"
-        onClick={() => setConfirming(false)}
-        className="text-xs text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
-      >
+      <button type="button" onClick={() => setConfirming(false)} className="ow-btn sm">
         Keep
       </button>
-      {state.status === 'error' && <span className="text-xs text-alert">{state.message}</span>}
+      {state.status === 'error' && <span className="ow-msg err">{state.message}</span>}
     </form>
   );
 }
@@ -89,18 +72,26 @@ export function ContactRow({
   const ids = [draft.smsId, draft.emailId].filter((id) => id !== '');
 
   return (
-    <li className="px-4 py-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="flex flex-wrap items-baseline gap-x-2 text-sm text-foreground">
-            <span className={draft.enabled ? '' : 'text-muted line-through'}>{draft.label}</span>
-            {!draft.enabled && <span className={`${CHIP} border-hairline text-muted`}>off</span>}
+    <li className="ow-listitem">
+      <div className="ow-inline" style={{ alignItems: 'flex-start' }}>
+        <div style={{ minWidth: 0, flex: '1 1 16rem' }}>
+          <p className="ow-body">
+            <b style={draft.enabled ? undefined : { textDecoration: 'line-through' }}>
+              {draft.label}
+            </b>
+            {!draft.enabled && (
+              <>
+                {' '}
+                <Badge variant="neutral">off</Badge>
+              </>
+            )}
           </p>
-          <p className="machine mt-1 text-xs text-muted">
-            {[draft.phone, draft.email].filter((v) => v !== '').join(' · ') ||
-              'no way to reach them'}
+          <p className="ow-quiet ow-machine">
+            {[draft.phone, draft.email].filter((v) => v !== '').join(' · ') || (
+              <span className="ow-wrong">no way to reach them</span>
+            )}
           </p>
-          <p className="mt-1 text-xs text-faint">
+          <p className="ow-quiet">
             {draft.tier === 0
               ? 'Called first'
               : `Called if group ${draft.tier} has not acknowledged`}
@@ -110,12 +101,8 @@ export function ContactRow({
         </div>
 
         {canEdit && (
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setEditing((v) => !v)}
-              className="rounded border border-hairline px-2 py-1 text-xs text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
-            >
+          <div className="ow-inline" style={{ marginLeft: 'auto', flex: 'none' }}>
+            <button type="button" onClick={() => setEditing((v) => !v)} className="ow-btn sm">
               {editing ? 'Close' : 'Edit'}
             </button>
             <ToggleForm ids={ids} enabled={draft.enabled} />
@@ -125,7 +112,7 @@ export function ContactRow({
       </div>
 
       {editing && canEdit && (
-        <div className="mt-4 rounded border border-hairline/60 p-4">
+        <div className="ow-group" style={{ marginTop: '13px' }}>
           <ContactForm draft={draft} farms={farms} tiers={tiers} onDone={() => setEditing(false)} />
         </div>
       )}

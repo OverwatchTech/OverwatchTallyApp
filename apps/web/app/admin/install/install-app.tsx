@@ -18,7 +18,8 @@ import { INSTALLABLE_MODELS, ROLE_LABELS, bomItem, type DeviceRole } from '@/lib
 import { CURVES } from '@/lib/admin/install/calibration';
 import { clearSynced, enqueue, flush, listQueue, loadContext, saveContext } from '@/lib/admin/install/queue';
 import type { DraftInstall, InstallContext, QueuedInstall } from '@/lib/admin/install/types';
-import { Field, FormNote, buttonClass, inputClass } from '@/lib/admin/ui';
+import { Card } from '@overwatch/ui';
+import { Field, FormNote, buttonClass, inputClass } from '../console-ui';
 import { normalizeDevEui } from '@/lib/admin/dev-eui';
 import { relativeTime } from '@/lib/admin/time';
 import { CaptureDevEui } from './capture-eui';
@@ -187,253 +188,270 @@ export function InstallApp({ context: serverContext }: { context: InstallContext
   };
 
   return (
-    <div className="mx-auto max-w-lg space-y-4 pb-24">
-      <header className="space-y-1">
-        <h1 className="type-display text-lg">Install</h1>
-        <p className="text-xs text-muted">
+    <div className="ow-touch ow-pad ow-stack">
+      <header>
+        <h1 className="ow-pagetitle">Install</h1>
+        <p className="ow-pagesub">
           Works with no signal. Captures are held on this handset and go up when the bars come back.
         </p>
       </header>
 
       <div
-        className={`flex items-center justify-between rounded border px-3 py-2 text-xs ${
-          online ? 'border-hairline text-muted' : 'border-alert/50 bg-alert/10 text-foreground'
-        }`}
+        className={online ? 'ow-inline' : 'ow-banner'}
+        style={
+          online
+            ? {
+                justifyContent: 'space-between',
+                border: '1px solid var(--line)',
+                borderRadius: '11px',
+                padding: '11px 14px',
+                color: 'var(--ink2)',
+              }
+            : { borderRadius: '11px', border: '1px solid rgba(255,92,56,.4)' }
+        }
       >
         <span>{online ? 'Online' : 'No signal — still working'}</span>
-        <span className="machine">{pending} waiting</span>
+        <span className="ow-machine" style={{ marginLeft: 'auto' }}>
+          {pending} waiting
+        </span>
       </div>
 
-      <section className="space-y-4 rounded-lg border border-hairline bg-card p-4">
-        <Field label="Farm">
-          <select value={farmId} onChange={(e) => setFarmId(e.target.value)} className={inputClass}>
-            {context.farms.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.orgName} — {option.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <CaptureDevEui value={devEui} onChange={setDevEui} />
-
-        <Field label="Model">
-          <select
-            value={model}
-            onChange={(e) => pickModel(e.target.value)}
-            className={`${inputClass} machine`}
-          >
-            {INSTALLABLE_MODELS.map((item) => (
-              <option key={item.code} value={item.code}>
-                {item.code} — {item.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <Field label="Role" hint={bomItem(model)?.note}>
-          <select
-            value={role}
-            onChange={(e) => {
-              setRole(e.target.value as DeviceRole);
-              setCurveValues({});
-            }}
-            className={inputClass}
-          >
-            {(Object.keys(ROLE_LABELS) as DeviceRole[]).map((value) => (
-              <option key={value} value={value}>
-                {ROLE_LABELS[value]}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </section>
-
-      <section className="space-y-4 rounded-lg border border-hairline bg-card p-4">
-        <h2 className="text-sm font-medium">Where it is</h2>
-
-        <Field label="Mounted on" hint="The pen, gate, or trough this sensor watches.">
-          <select
-            value={mountedOn}
-            onChange={(e) => setMountedOn(e.target.value)}
-            className={inputClass}
-          >
-            <option value="">— not on the map yet —</option>
-            {(farm?.features ?? []).map((feature) => (
-              <option key={feature.id} value={feature.id}>
-                {feature.name} ({feature.kind})
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        {!mountedOn && pointKind && (
-          <div className="space-y-3 rounded border border-hairline p-3">
-            <p className="text-xs text-muted">
-              Drop a new {pointKind} here. The map screen can move it later.
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="Longitude">
-                <input
-                  value={coords.lng}
-                  inputMode="decimal"
-                  onChange={(e) => setCoords({ ...coords, lng: e.target.value })}
-                  className={`${inputClass} machine`}
-                />
-              </Field>
-              <Field label="Latitude">
-                <input
-                  value={coords.lat}
-                  inputMode="decimal"
-                  onChange={(e) => setCoords({ ...coords, lat: e.target.value })}
-                  className={`${inputClass} machine`}
-                />
-              </Field>
-            </div>
-            <Field label={`${pointKind} name`}>
-              <input
-                value={pointName}
-                onChange={(e) => setPointName(e.target.value)}
-                className={inputClass}
-              />
-            </Field>
-            <button type="button" onClick={useMyLocation} className={buttonClass()}>
-              Use my location
-            </button>
-          </div>
-        )}
-
-        {!mountedOn && !pointKind && (
-          <p className="text-xs text-muted">
-            Only gates and troughs can be dropped as a new point. Anything else is placed on the map
-            screen first, then chosen here.
-          </p>
-        )}
-      </section>
-
-      <section className="space-y-4 rounded-lg border border-hairline bg-card p-4">
-        <h2 className="text-sm font-medium">Signal check</h2>
-        <p className="text-xs text-muted">
-          Read off ToolBox at the mount point. A browser cannot see LoRa signal, so this is your
-          number and it is recorded as yours.
-        </p>
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="RSSI" hint="dBm">
-            <input
-              value={signal.rssi}
-              inputMode="numeric"
-              onChange={(e) => setSignal({ ...signal, rssi: e.target.value })}
-              className={`${inputClass} machine`}
-            />
+      <Card title="What it is">
+        <div className="ow-form bare ow-stack">
+          <Field label="Farm">
+            <select
+              value={farmId}
+              onChange={(e) => setFarmId(e.target.value)}
+              className={inputClass}
+            >
+              {context.farms.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.orgName} — {option.name}
+                </option>
+              ))}
+            </select>
           </Field>
-          <Field label="SNR" hint="dB">
-            <input
-              value={signal.snr}
-              inputMode="numeric"
-              onChange={(e) => setSignal({ ...signal, snr: e.target.value })}
-              className={`${inputClass} machine`}
-            />
+
+          <CaptureDevEui value={devEui} onChange={setDevEui} />
+
+          <Field label="Model">
+            <select
+              value={model}
+              onChange={(e) => pickModel(e.target.value)}
+              className={`${inputClass} mono`}
+            >
+              {INSTALLABLE_MODELS.map((item) => (
+                <option key={item.code} value={item.code}>
+                  {item.code} — {item.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Role" hint={bomItem(model)?.note}>
+            <select
+              value={role}
+              onChange={(e) => {
+                setRole(e.target.value as DeviceRole);
+                setCurveValues({});
+              }}
+              className={inputClass}
+            >
+              {(Object.keys(ROLE_LABELS) as DeviceRole[]).map((value) => (
+                <option key={value} value={value}>
+                  {ROLE_LABELS[value]}
+                </option>
+              ))}
+            </select>
           </Field>
         </div>
-        <Field label="Gateway">
-          <input
-            value={signal.gateway}
-            onChange={(e) => setSignal({ ...signal, gateway: e.target.value })}
-            className={inputClass}
-          />
-        </Field>
-        <label className="flex items-center gap-2 text-xs text-foreground">
-          <input
-            type="checkbox"
-            checked={signal.passed}
-            onChange={(e) => setSignal({ ...signal, passed: e.target.checked })}
-            className="accent-[var(--accent)]"
-          />
-          Link is good enough to leave it here
-        </label>
-        {!signal.passed && (
-          <Field label="What is wrong">
+      </Card>
+
+      <Card title="Where it is">
+        <div className="ow-form bare ow-stack">
+          <Field label="Mounted on" hint="The pen, gate, or trough this sensor watches.">
+            <select
+              value={mountedOn}
+              onChange={(e) => setMountedOn(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">— not on the map yet —</option>
+              {(farm?.features ?? []).map((feature) => (
+                <option key={feature.id} value={feature.id}>
+                  {feature.name} ({feature.kind})
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {!mountedOn && pointKind && (
+            <div className="ow-group">
+              <p className="ow-quiet">
+                Drop a new {pointKind} here. The map screen can move it later.
+              </p>
+              <div className="ow-fgrid">
+                <Field label="Longitude">
+                  <input
+                    value={coords.lng}
+                    inputMode="decimal"
+                    onChange={(e) => setCoords({ ...coords, lng: e.target.value })}
+                    className={`${inputClass} mono`}
+                  />
+                </Field>
+                <Field label="Latitude">
+                  <input
+                    value={coords.lat}
+                    inputMode="decimal"
+                    onChange={(e) => setCoords({ ...coords, lat: e.target.value })}
+                    className={`${inputClass} mono`}
+                  />
+                </Field>
+              </div>
+              <Field label={`${pointKind} name`}>
+                <input
+                  value={pointName}
+                  onChange={(e) => setPointName(e.target.value)}
+                  className={inputClass}
+                />
+              </Field>
+              <button type="button" onClick={useMyLocation} className={buttonClass()}>
+                Use my location
+              </button>
+            </div>
+          )}
+
+          {!mountedOn && !pointKind && (
+            <p className="ow-quiet">
+              Only gates and troughs can be dropped as a new point. Anything else is placed on the
+              map screen first, then chosen here.
+            </p>
+          )}
+        </div>
+      </Card>
+
+      <Card
+        title="Signal check"
+        note="Read off ToolBox at the mount point. A browser cannot see LoRa signal, so this is your number and it is recorded as yours."
+      >
+        <div className="ow-form bare ow-stack">
+          <div className="ow-fgrid">
+            <Field label="RSSI" hint="dBm">
+              <input
+                value={signal.rssi}
+                inputMode="numeric"
+                onChange={(e) => setSignal({ ...signal, rssi: e.target.value })}
+                className={`${inputClass} mono`}
+              />
+            </Field>
+            <Field label="SNR" hint="dB">
+              <input
+                value={signal.snr}
+                inputMode="numeric"
+                onChange={(e) => setSignal({ ...signal, snr: e.target.value })}
+                className={`${inputClass} mono`}
+              />
+            </Field>
+          </div>
+          <Field label="Gateway">
             <input
-              value={signal.note}
-              onChange={(e) => setSignal({ ...signal, note: e.target.value })}
+              value={signal.gateway}
+              onChange={(e) => setSignal({ ...signal, gateway: e.target.value })}
               className={inputClass}
             />
           </Field>
-        )}
-      </section>
+          <label className="ow-check">
+            <input
+              type="checkbox"
+              checked={signal.passed}
+              onChange={(e) => setSignal({ ...signal, passed: e.target.checked })}
+            />
+            Link is good enough to leave it here
+          </label>
+          {!signal.passed && (
+            <Field label="What is wrong">
+              <input
+                value={signal.note}
+                onChange={(e) => setSignal({ ...signal, note: e.target.value })}
+                className={inputClass}
+              />
+            </Field>
+          )}
+        </div>
+      </Card>
 
       {spec.fields.length > 0 && (
-        <section className="space-y-4 rounded-lg border border-hairline bg-card p-4">
-          <h2 className="text-sm font-medium">Calibration</h2>
-          <p className="text-xs text-muted">{spec.summary}</p>
-          {spec.fields.map((fieldSpec) => (
-            <Field
-              key={fieldSpec.key}
-              label={`${fieldSpec.label}${fieldSpec.unit ? ` (${fieldSpec.unit})` : ''}`}
-              hint={fieldSpec.hint}
-            >
-              {fieldSpec.kind === 'select' ? (
-                <select
-                  value={curveValues[fieldSpec.key] ?? ''}
-                  onChange={(e) =>
-                    setCurveValues({ ...curveValues, [fieldSpec.key]: e.target.value })
-                  }
-                  className={inputClass}
-                >
-                  <option value="">—</option>
-                  {(fieldSpec.options ?? []).map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  value={curveValues[fieldSpec.key] ?? ''}
-                  inputMode={fieldSpec.kind === 'number' ? 'decimal' : 'text'}
-                  onChange={(e) =>
-                    setCurveValues({ ...curveValues, [fieldSpec.key]: e.target.value })
-                  }
-                  className={`${inputClass} machine`}
-                />
-              )}
-            </Field>
-          ))}
-        </section>
+        <Card title="Calibration" note={spec.summary}>
+          <div className="ow-form bare ow-stack">
+            {spec.fields.map((fieldSpec) => (
+              <Field
+                key={fieldSpec.key}
+                label={`${fieldSpec.label}${fieldSpec.unit ? ` (${fieldSpec.unit})` : ''}`}
+                hint={fieldSpec.hint}
+              >
+                {fieldSpec.kind === 'select' ? (
+                  <select
+                    value={curveValues[fieldSpec.key] ?? ''}
+                    onChange={(e) =>
+                      setCurveValues({ ...curveValues, [fieldSpec.key]: e.target.value })
+                    }
+                    className={inputClass}
+                  >
+                    <option value="">—</option>
+                    {(fieldSpec.options ?? []).map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    value={curveValues[fieldSpec.key] ?? ''}
+                    inputMode={fieldSpec.kind === 'number' ? 'decimal' : 'text'}
+                    onChange={(e) =>
+                      setCurveValues({ ...curveValues, [fieldSpec.key]: e.target.value })
+                    }
+                    className={`${inputClass} mono`}
+                  />
+                )}
+              </Field>
+            ))}
+          </div>
+        </Card>
       )}
 
-      <section className="space-y-4 rounded-lg border border-hairline bg-card p-4">
-        <h2 className="text-sm font-medium">Photo and notes</h2>
-        <Field label="Install photo" hint="Held on the handset until it uploads.">
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(e) => setPhoto(e.target.files?.[0] ?? null)}
-            className="w-full text-xs text-muted file:mr-3 file:rounded file:border file:border-hairline file:bg-background file:px-3 file:py-1.5 file:text-xs file:text-foreground"
-          />
-        </Field>
-        <Field label="Notes">
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={2}
-            className={inputClass}
-          />
-        </Field>
-      </section>
+      <Card title="Photo and notes">
+        <div className="ow-form bare ow-stack">
+          <Field label="Install photo" hint="Held on the handset until it uploads.">
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={(e) => setPhoto(e.target.files?.[0] ?? null)}
+              className="ow-input"
+            />
+          </Field>
+          <Field label="Notes">
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              className={inputClass}
+            />
+          </Field>
+        </div>
+      </Card>
 
-      <div className="sticky bottom-0 space-y-2 border-t border-hairline bg-background/95 py-3 backdrop-blur">
-        <button type="button" onClick={() => void save()} className={`${buttonClass(true)} w-full py-3 text-sm`}>
+      <div className="ow-stickyact">
+        <button type="button" onClick={() => void save()} className="ow-btn pri block">
           Save install
         </button>
         <FormNote status={note.status} message={note.message} />
       </div>
 
-      <section className="rounded-lg border border-hairline bg-card">
-        <header className="flex items-center justify-between border-b border-hairline px-4 py-3">
-          <h2 className="text-sm font-medium">On this handset</h2>
-          <div className="flex gap-2">
+      <Card
+        title="On this handset"
+        aside={
+          <span className="ow-inline">
             <button
               type="button"
               onClick={() => void flush().then(refreshQueue)}
@@ -448,39 +466,41 @@ export function InstallApp({ context: serverContext }: { context: InstallContext
             >
               Clear done
             </button>
-          </div>
-        </header>
+          </span>
+        }
+        padded={false}
+      >
         {queue.length === 0 ? (
-          <p className="px-4 py-6 text-xs text-muted">Nothing captured yet.</p>
+          <div className="ow-note">Nothing captured yet.</div>
         ) : (
-          <ul className="divide-y divide-hairline">
+          <ul>
             {queue.map((entry) => (
-              <li key={entry.draft.localId} className="px-4 py-3">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="machine text-xs text-foreground">{entry.draft.devEui}</span>
+              <li key={entry.draft.localId} className="ow-listitem">
+                <div className="ow-inline" style={{ justifyContent: 'space-between' }}>
+                  <span className="ow-machine">{entry.draft.devEui}</span>
                   <span
-                    className={`machine text-xs ${
+                    className={`ow-machine ${
                       entry.state === 'synced'
-                        ? 'text-accent'
+                        ? 'ow-live'
                         : entry.state === 'failed'
-                          ? 'text-alert'
-                          : 'text-muted'
+                          ? 'ow-wrong'
+                          : 'ow-quiet'
                     }`}
                   >
                     {entry.state} · {relativeTime(entry.draft.capturedAt)}
                   </span>
                 </div>
-                <p className="text-xs text-muted">
+                <p className="ow-quiet">
                   {entry.draft.model} · {ROLE_LABELS[entry.draft.role]}
                   {entry.photoStatus !== 'none' && ` · photo ${entry.photoStatus}`}
                 </p>
-                {entry.lastError && <p className="text-xs text-alert">{entry.lastError}</p>}
-                {entry.photoError && <p className="text-xs text-alert">{entry.photoError}</p>}
+                {entry.lastError && <p className="ow-quiet ow-wrong">{entry.lastError}</p>}
+                {entry.photoError && <p className="ow-quiet ow-wrong">{entry.photoError}</p>}
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </Card>
     </div>
   );
 }

@@ -14,7 +14,7 @@
 // that silently never reports.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { devEuiFromScan, formatDevEui, normalizeDevEui } from '@/lib/admin/dev-eui';
-import { buttonClass, inputClass } from '@/lib/admin/ui';
+import { buttonClass, inputClass } from '../console-ui';
 
 interface DetectedBarcode {
   rawValue: string;
@@ -171,9 +171,9 @@ export function CaptureDevEui({
   const normalized = normalizeDevEui(typed);
 
   return (
-    <div className="space-y-2">
-      <label className="block space-y-1">
-        <span className="block text-xs text-muted">DevEUI</span>
+    <div className="ow-stack tight">
+      <label className="ow-field">
+        <span className="lbl">DevEUI</span>
         <input
           value={typed}
           inputMode="text"
@@ -187,11 +187,11 @@ export function CaptureDevEui({
             onChange(result.ok ? result.value : '');
             setMessage('');
           }}
-          className={`${inputClass} machine text-base uppercase`}
+          className={`${inputClass} mono`} style={{ textTransform: 'uppercase' }}
         />
       </label>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="ow-inline">
         {supportsScan && (
           <button
             type="button"
@@ -213,16 +213,16 @@ export function CaptureDevEui({
           ref={videoRef}
           muted
           playsInline
-          className="w-full rounded border border-hairline bg-background"
+          className="ow-code" style={{ width: '100%', padding: 0 }}
         />
       )}
 
       {typed !== '' && (
-        <p className={`machine text-xs ${normalized.ok ? 'text-accent' : 'text-alert'}`}>
+        <p className={`ow-machine ow-quiet ${normalized.ok ? 'ow-live' : 'ow-wrong'}`}>
           {normalized.ok ? formatDevEui(normalized.value) : normalized.message}
         </p>
       )}
-      {message && <p className="text-xs text-muted">{message}</p>}
+      {message && <p className="ow-quiet">{message}</p>}
     </div>
   );
 }

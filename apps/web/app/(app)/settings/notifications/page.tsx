@@ -27,6 +27,7 @@
 // setup, not a fault, and wears muted grey.
 
 import Link from 'next/link';
+import { Badge, Card } from '@overwatch/ui';
 
 import { createClient } from '@/lib/supabase/server';
 import { claimsFromSession, isManagerOrOwner } from '@/lib/auth/claims';
@@ -135,61 +136,59 @@ export default async function NotificationsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h2 className="text-base font-medium">Notifications</h2>
-        <p className="mt-2 max-w-2xl text-sm text-muted">
-          Who gets told when something goes wrong, how they hear about it, and the hours you would
-          rather not have a phone ring.
-          {!canEdit && ' Changing any of it needs manager or owner access.'}
-        </p>
-      </header>
-
-      {/* ── The rails, honestly ──────────────────────────────── */}
-      <section className="grid gap-3 sm:grid-cols-3">
-        {rails.map((rail) => (
-          <div key={rail.channel} className="rounded-lg border border-hairline bg-card p-4">
-            <p className="text-xs text-muted">{channelLabel(rail.channel)}</p>
-            <p className={`machine mt-1 text-sm ${rail.working ? 'text-accent' : 'text-muted'}`}>
-              {rail.state}
-            </p>
-            <p className="mt-2 text-xs text-faint">{rail.detail}</p>
-          </div>
-        ))}
-      </section>
+    <>
+      <Card
+        title="Notifications"
+        padded={false}
+        note={
+          <>
+            Who gets told when something goes wrong, how they hear about it, and the hours you would
+            rather not have a phone ring.
+            {!canEdit && ' Changing any of it needs manager or owner access.'}
+          </>
+        }
+      >
+        {/* ── The rails, honestly ──────────────────────────────── */}
+        <div className="ow-kv flat three">
+          {rails.map((rail) => (
+            <div key={rail.channel}>
+              <div className="k">{channelLabel(rail.channel)}</div>
+              <div className={`v ${rail.working ? 'ow-live' : ''}`}>{rail.state}</div>
+              <div className="d">{rail.detail}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
 
       {/* ── The sentence, first time ─────────────────────────── */}
-      <section className="rounded-lg border border-hairline bg-card p-5">
-        <h3 className="text-sm font-medium">Quiet hours silence the phone, not the record</h3>
-        <p className="mt-2 max-w-2xl text-sm text-muted">
+      <Card
+        title="Quiet hours silence the phone, not the record"
+        note="Acknowledging an alert stops the chain from calling the next person. It does not close the alert: saying you know about low water is not the same as water in the trough."
+      >
+        <p className="ow-body">
           An alert that fires at 02:00 is recorded at 02:00 and shows on the alerts screen at 02:00,
           quiet hours or not. What a quiet window changes is whether a text message or an email goes
           out while it is open. Nothing is cancelled and nothing is hidden — you will find it there
           when you look.
         </p>
-        <p className="mt-2 max-w-2xl text-xs text-faint">
-          Acknowledging an alert stops the chain from calling the next person. It does not close the
-          alert: saying you know about low water is not the same as water in the trough.
-        </p>
-      </section>
+      </Card>
 
       {/* ── Contacts ─────────────────────────────────────────── */}
-      <section className="rounded-lg border border-hairline bg-card">
-        <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-hairline px-4 py-3">
-          <div>
-            <h3 className="text-sm font-medium">Who gets told</h3>
-            <p className="mt-1 text-xs text-faint">
-              {contacts.length === 0
-                ? 'Nobody yet'
-                : `${contacts.length} ${contacts.length === 1 ? 'contact' : 'contacts'}`}
-            </p>
-          </div>
-          {canEdit && <AddContact farms={farms} tiers={tierChoices} />}
-        </div>
-
+      <Card
+        title="Who gets told"
+        sub={
+          <span className="ow-machine">
+            {contacts.length === 0
+              ? 'Nobody yet'
+              : `${contacts.length} ${contacts.length === 1 ? 'contact' : 'contacts'}`}
+          </span>
+        }
+        aside={canEdit ? <AddContact farms={farms} tiers={tierChoices} /> : undefined}
+        padded={false}
+      >
         {contacts.length === 0 ? (
-          <div className="px-4 py-6">
-            <p className="text-sm text-muted">
+          <div className="ow-listitem">
+            <p className="ow-body">
               No phone number or mailbox is on file for this operation. Alerts still open and still
               show on the alerts screen — but at 02:00 nobody is looking at it.
             </p>
@@ -197,10 +196,10 @@ export default async function NotificationsPage() {
         ) : (
           tiersPresent.map((tier) => (
             <div key={tier}>
-              <p className="border-b border-hairline/60 bg-background/40 px-4 py-1.5 text-xs text-muted">
+              <p className="ow-groupbar">
                 {tier === 0 ? 'Called first' : `Called if group ${tier} has not acknowledged`}
               </p>
-              <ul className="divide-y divide-hairline">
+              <ul>
                 {(byTier.get(tier) ?? []).map((contact) => (
                   <ContactRow
                     key={contact.key}
@@ -219,7 +218,7 @@ export default async function NotificationsPage() {
             </div>
           ))
         )}
-      </section>
+      </Card>
 
       {/* ── Per-rule quiet hours and chain ───────────────────── */}
       {farms.map((farm) => {
@@ -230,27 +229,31 @@ export default async function NotificationsPage() {
         );
 
         return (
-          <section key={farm.id} className="rounded-lg border border-hairline bg-card">
-            <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-hairline px-4 py-3">
-              <div>
-                <h3 className="text-sm font-medium">When we call about {farm.name}</h3>
-                <p className="mt-1 text-xs text-faint">
-                  {ordered.length === 0
-                    ? 'Nothing is being watched here yet'
-                    : `${ordered.filter((r) => r.enabled).length} of ${ordered.length} watched`}
-                </p>
-              </div>
-            </div>
-
+          <Card
+            key={farm.id}
+            title={`When we call about ${farm.name}`}
+            sub={
+              <span className="ow-machine">
+                {ordered.length === 0
+                  ? 'Nothing is being watched here yet'
+                  : `${ordered.filter((r) => r.enabled).length} of ${ordered.length} watched`}
+              </span>
+            }
+            padded={false}
+          >
             {ordered.length === 0 ? (
-              <div className="space-y-3 px-4 py-6">
-                <p className="text-sm text-alert">
+              <div className="ow-listitem">
+                <p className="ow-body ow-wrong">
                   Nothing on {farm.name} is being watched, so nothing will ever open an alert.
                 </p>
-                {canEdit && <SeedRulesForm farmId={farm.id} farmName={farm.name} />}
+                {canEdit && (
+                  <div style={{ marginTop: '11px' }}>
+                    <SeedRulesForm farmId={farm.id} farmName={farm.name} />
+                  </div>
+                )}
               </div>
             ) : (
-              <ul className="divide-y divide-hairline">
+              <ul>
                 {ordered.map((rule) => {
                   const copy = KIND_COPY[rule.kind as AlertKind];
                   const quiet = parseQuietHours(rule.quiet_hours);
@@ -258,28 +261,34 @@ export default async function NotificationsPage() {
                   const settings = ruleSettings(rule.kind, rule.params);
 
                   return (
-                    <li key={rule.id} className="px-4 py-3">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm text-foreground">
-                            {copy?.label ?? rule.kind}
+                    <li key={rule.id} className="ow-listitem">
+                      <div className="ow-inline" style={{ alignItems: 'flex-start' }}>
+                        <div style={{ minWidth: 0, flex: '1 1 18rem' }}>
+                          <p className="ow-body">
+                            <b>{copy?.label ?? rule.kind}</b>
                             {!rule.enabled && (
-                              <span className="machine ml-2 rounded border border-hairline px-1.5 py-0.5 text-[10px] leading-none text-muted">
-                                not watched
-                              </span>
+                              <>
+                                {' '}
+                                <Badge variant="neutral">not watched</Badge>
+                              </>
                             )}
                           </p>
-                          <p className="mt-1 max-w-xl text-xs text-faint">{copy?.watches}</p>
-                          <p className="machine mt-1 text-xs text-muted">
+                          <p className="ow-quiet">{copy?.watches}</p>
+                          <p className="ow-quiet ow-machine">
                             {quietHoursLabel(quiet)} · {escalationLabel(chain)}
                           </p>
                         </div>
                         {settings.length > 0 && (
-                          <dl className="machine shrink-0 text-right text-xs text-faint">
+                          <dl
+                            className="ow-quiet ow-machine"
+                            style={{ marginLeft: 'auto', textAlign: 'right', flex: 'none' }}
+                          >
                             {settings.map((s) => (
                               <div key={s.label}>
-                                <dt className="inline">{s.label} </dt>
-                                <dd className="inline text-foreground">{s.value}</dd>
+                                <dt style={{ display: 'inline' }}>{s.label} </dt>
+                                <dd style={{ display: 'inline' }}>
+                                  <b>{s.value}</b>
+                                </dd>
                               </div>
                             ))}
                           </dl>
@@ -287,12 +296,9 @@ export default async function NotificationsPage() {
                       </div>
 
                       {canEdit && (
-                        <details className="group mt-3">
-                          <summary className="cursor-pointer list-none text-xs text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent">
-                            <span className="group-open:hidden">Change the hours ▸</span>
-                            <span className="hidden group-open:inline">Change the hours ▾</span>
-                          </summary>
-                          <div className="mt-3">
+                        <details className="ow-disc" style={{ marginTop: '11px' }}>
+                          <summary>Change the hours</summary>
+                          <div style={{ marginTop: '11px' }}>
                             <RuleDeliveryForm draft={ruleDraft(rule)} />
                           </div>
                         </details>
@@ -302,20 +308,17 @@ export default async function NotificationsPage() {
                 })}
               </ul>
             )}
-          </section>
+          </Card>
         );
       })}
 
-      <p className="text-xs text-faint">
+      <p className="ow-quiet">
         Adding or removing sensors is handled by your installer, not here.{' '}
-        <Link
-          href="/alerts"
-          className="text-accent underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-        >
+        <Link href="/alerts" className="ow-live">
           See what is open right now
         </Link>
         .
       </p>
-    </div>
+    </>
   );
 }

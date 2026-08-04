@@ -1,24 +1,30 @@
-"use client";
+'use client';
 
 // Legal-boundary onboarding flow: find candidate parcels (address or the
 // farm's saved location), pick the ones the farm sits on, set the boundary,
 // then preload building footprints. All writes go through server actions;
 // RLS is the enforcement behind the owner/manager gate.
+//
+// Presentation is the approved mockup: Card `.hd/.bd/.note`, `.ow-btn`,
+// and the parcel picker as dense hairline-ruled rows. The steps, the words
+// and the server actions are unchanged.
 
-import Link from "next/link";
-import { useActionState, useMemo, useState } from "react";
+import Link from 'next/link';
+import { useActionState, useMemo, useState } from 'react';
+import { Button, Card } from '@overwatch/ui';
 import {
   addBuildings,
   findBuildings,
   searchParcels,
   setFarmBoundary,
-} from "./actions";
+} from './actions';
 import {
   initialAddBuildingsState,
   initialFindBuildingsState,
   initialParcelSearchState,
   initialSetBoundaryState,
-} from "./state";
+} from './state';
+import './setup-forms.css';
 
 export function BoundaryFlow({
   farmId,
@@ -62,7 +68,7 @@ export function BoundaryFlow({
       try {
         const geometry = JSON.parse(c.geojson) as { type?: string; coordinates?: unknown[] };
         count +=
-          geometry.type === "MultiPolygon" && Array.isArray(geometry.coordinates)
+          geometry.type === 'MultiPolygon' && Array.isArray(geometry.coordinates)
             ? geometry.coordinates.length
             : 1;
       } catch {
@@ -84,100 +90,97 @@ export function BoundaryFlow({
   const buildings = findState.buildings;
 
   return (
-    <div className="space-y-6">
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <h2 className="text-base font-medium">Find the legal boundary</h2>
-        <p className="mt-1 text-sm text-muted">
+    <>
+      <Card
+        title="Find the legal boundary"
+        sub="county records"
+        note="Parcel lookup covers Utah today."
+      >
+        <p className="ow-prose" style={{ marginBottom: 12 }}>
           Look up the recorded parcels the farm sits on, straight from the county records.
         </p>
-        <form action={searchAction} className="mt-4 space-y-3">
+        <form action={searchAction}>
           <input type="hidden" name="farmId" value={farmId} />
-          <div className="space-y-1.5">
-            <label htmlFor="parcel-address" className="block text-sm text-muted">
-              Farm address
-            </label>
+          <label className="ow-field" htmlFor="parcel-address">
+            <span className="k">Farm address</span>
             <input
               id="parcel-address"
               name="address"
               type="text"
               placeholder="160 N Main St, Gunnison, UT 84634"
-              className="w-full rounded-md border border-hairline bg-background px-3 py-2 text-sm text-foreground placeholder:text-faint focus:border-accent focus:outline-none"
+              className="ow-input"
             />
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
+          </label>
+          <div className="ow-formrow">
+            <Button
               type="submit"
+              variant="primary"
               name="mode"
               value="address"
               disabled={searching}
-              className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-background transition-colors hover:bg-accent-deep disabled:opacity-60"
             >
-              {searching ? "Searching…" : "Search parcels"}
-            </button>
-            <span className="text-xs text-faint">or</span>
-            <button
+              {searching ? 'Searching…' : 'Search parcels'}
+            </Button>
+            <span className="sep">or</span>
+            <Button
               type="submit"
               name="mode"
               value="point"
               disabled={searching || !centroidAvailable}
-              className="rounded-md border border-hairline px-3 py-2 text-sm text-foreground transition-colors hover:border-accent hover:text-accent disabled:opacity-60"
             >
               Use farm location
-            </button>
+            </Button>
             {!centroidAvailable && (
-              <span className="text-xs text-faint">This farm has no saved location yet.</span>
+              <span className="sep">This farm has no saved location yet.</span>
             )}
           </div>
-          <p className="text-xs text-faint">Parcel lookup covers Utah today.</p>
         </form>
 
-        {(searchState.status === "error" || searchState.status === "empty") && (
+        {(searchState.status === 'error' || searchState.status === 'empty') && (
           <p
-            className={`mt-3 text-sm ${searchState.status === "error" ? "text-alert" : "text-muted"}`}
+            className={`ow-formmsg${searchState.status === 'error' ? ' crit' : ''}`}
+            style={{ marginTop: 12 }}
           >
             {searchState.message}
           </p>
         )}
-      </section>
+      </Card>
 
-      {searchState.status === "results" && (
-        <section className="rounded-lg border border-hairline bg-card">
-          <header className="border-b border-hairline px-4 py-3">
-            <h2 className="text-base font-medium">
-              {candidates.length} {candidates.length === 1 ? "parcel" : "parcels"} found
-            </h2>
-            <p className="mt-1 text-xs text-muted">
-              Pick every parcel the farm sits on, then set the boundary.
-            </p>
-          </header>
-          <ul className="divide-y divide-hairline">
+      {searchState.status === 'results' && (
+        <Card
+          title={`${candidates.length} ${candidates.length === 1 ? 'parcel' : 'parcels'} found`}
+          sub="pick every parcel the farm sits on"
+          padded={false}
+        >
+          <div>
             {candidates.map((c) => (
-              <li key={c.apn}>
-                <label className="flex cursor-pointer items-center gap-3 px-4 py-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedApns.has(c.apn)}
-                    onChange={() => toggle(c.apn)}
-                    className="h-4 w-4 accent-[--accent]"
-                  />
-                  <span className="machine text-sm text-foreground">{c.apn}</span>
-                  <span className="text-sm text-muted">{c.acresLabel}</span>
-                </label>
-              </li>
+              <label className="ow-pick" key={c.apn}>
+                <input
+                  type="checkbox"
+                  checked={selectedApns.has(c.apn)}
+                  onChange={() => toggle(c.apn)}
+                />
+                <span className="id">{c.apn}</span>
+                <span className="sz">{c.acresLabel}</span>
+              </label>
             ))}
-          </ul>
-          <footer className="space-y-3 border-t border-hairline px-4 py-4">
+          </div>
+          <div className="ow-bd" style={{ borderTop: '1px solid var(--line)' }}>
             {selectedShapeCount > 1 && (
-              <p className="text-xs text-muted">
+              <p className="ow-prose faint" style={{ marginBottom: 10 }}>
                 More than one shape selected: the boundary is stored as one straight-sided outline
                 drawn around everything, so ground between parcels ends up inside the line.
               </p>
             )}
-            {setState.status === "error" && (
-              <p className="text-sm text-alert">{setState.message}</p>
+            {setState.status === 'error' && (
+              <p className="ow-formmsg crit" style={{ marginBottom: 10 }}>
+                {setState.message}
+              </p>
             )}
-            {setState.status === "saved" && (
-              <p className="text-sm text-accent">{setState.message}</p>
+            {setState.status === 'saved' && (
+              <p className="ow-formmsg ok" style={{ marginBottom: 10 }}>
+                {setState.message}
+              </p>
             )}
             <form action={setAction}>
               <input type="hidden" name="farmId" value={farmId} />
@@ -186,102 +189,92 @@ export function BoundaryFlow({
                 name="parcels"
                 value={JSON.stringify(selected.map((c) => ({ apn: c.apn, geojson: c.geojson })))}
               />
-              <button
-                type="submit"
-                disabled={saving || selected.length === 0}
-                className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-background transition-colors hover:bg-accent-deep disabled:opacity-60"
-              >
-                {saving ? "Setting…" : "Set farm boundary"}
-              </button>
+              <Button type="submit" variant="primary" disabled={saving || selected.length === 0}>
+                {saving ? 'Setting…' : 'Set farm boundary'}
+              </Button>
             </form>
-          </footer>
-        </section>
+          </div>
+        </Card>
       )}
 
       {hasBoundary && (
-        <section className="rounded-lg border border-hairline bg-card p-6">
-          <h2 className="text-base font-medium">Buildings</h2>
-          <p className="mt-1 text-sm text-muted">
-            Pull barns, sheds, and houses from open building maps so they&apos;re on the farm
-            map before anyone draws.
+        <Card title="Buildings" sub="open building maps">
+          <p className="ow-prose" style={{ marginBottom: 12 }}>
+            Pull barns, sheds, and houses from open building maps so they&apos;re on the farm map
+            before anyone draws.
           </p>
 
-          {addState.status === "added" ? (
-            <div className="mt-4 space-y-2">
-              <p className="text-sm text-accent">
+          {addState.status === 'added' ? (
+            <div>
+              <p className="ow-formmsg ok">
                 {addState.imported === 0
-                  ? "Nothing new to add."
-                  : `${addState.imported} ${addState.imported === 1 ? "building" : "buildings"} added to the map.`}
+                  ? 'Nothing new to add.'
+                  : `${addState.imported} ${addState.imported === 1 ? 'building' : 'buildings'} added to the map.`}
               </p>
               {addState.skipped > 0 && (
-                <p className="text-xs text-muted">
+                <p className="ow-prose faint" style={{ marginTop: 6 }}>
                   {addState.skipped} already on the map, skipped.
                 </p>
               )}
-              <Link
-                href={`/farms/${farmId}/map`}
-                className="inline-block text-sm text-accent transition-colors hover:text-foreground"
-              >
-                Open map
-              </Link>
+              <div className="ow-formrow" style={{ marginTop: 12 }}>
+                <Link href={`/farms/${farmId}/map`} className="ow-btn">
+                  Open map
+                </Link>
+              </div>
             </div>
-          ) : findState.status === "found" ? (
-            <div className="mt-4 space-y-3">
+          ) : findState.status === 'found' ? (
+            <div>
               {buildings.length === 0 ? (
-                <p className="text-sm text-muted">
+                <p className="ow-prose">
                   No mapped buildings inside the boundary. Open building maps are thin in open
                   country — barns and sheds can be drawn on the farm map instead.
                 </p>
               ) : (
                 <>
-                  <p className="text-sm text-foreground">
-                    {buildings.length} {buildings.length === 1 ? "building" : "buildings"} found
-                    inside the boundary. They come in named Building 1, Building 2, and so on —
-                    rename them on the map.
+                  <p className="ow-prose">
+                    <b>
+                      {buildings.length} {buildings.length === 1 ? 'building' : 'buildings'}
+                    </b>{' '}
+                    found inside the boundary. They come in named Building 1, Building 2, and so
+                    on — rename them on the map.
                   </p>
-                  {addState.status === "error" && (
-                    <p className="text-sm text-alert">{addState.message}</p>
+                  {addState.status === 'error' && (
+                    <p className="ow-formmsg crit" style={{ marginTop: 10 }}>
+                      {addState.message}
+                    </p>
                   )}
-                  <form action={addAction}>
+                  <form action={addAction} style={{ marginTop: 12 }}>
                     <input type="hidden" name="farmId" value={farmId} />
-                    <input
-                      type="hidden"
-                      name="buildings"
-                      value={JSON.stringify(buildings)}
-                    />
-                    <button
-                      type="submit"
-                      disabled={adding}
-                      className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-background transition-colors hover:bg-accent-deep disabled:opacity-60"
-                    >
+                    <input type="hidden" name="buildings" value={JSON.stringify(buildings)} />
+                    <Button type="submit" variant="primary" disabled={adding}>
                       {adding
-                        ? "Adding…"
-                        : `Add ${buildings.length} ${buildings.length === 1 ? "building" : "buildings"}`}
-                    </button>
+                        ? 'Adding…'
+                        : `Add ${buildings.length} ${buildings.length === 1 ? 'building' : 'buildings'}`}
+                    </Button>
                   </form>
-                  <p className="text-xs text-faint">© OpenStreetMap contributors</p>
+                  <p className="ow-prose faint" style={{ marginTop: 10 }}>
+                    © OpenStreetMap contributors
+                  </p>
                 </>
               )}
             </div>
           ) : (
-            <div className="mt-4 space-y-3">
-              {findState.status === "error" && (
-                <p className="text-sm text-alert">{findState.message}</p>
+            <div>
+              {findState.status === 'error' && (
+                <p className="ow-formmsg crit" style={{ marginBottom: 10 }}>
+                  {findState.message}
+                </p>
               )}
               <form action={findAction}>
                 <input type="hidden" name="farmId" value={farmId} />
-                <button
-                  type="submit"
-                  disabled={finding}
-                  className="rounded-md border border-hairline px-3 py-2 text-sm text-foreground transition-colors hover:border-accent hover:text-accent disabled:opacity-60"
-                >
-                  {finding ? "Looking…" : "Find buildings"}
-                </button>
+                <Button type="submit" disabled={finding}>
+                  {finding ? 'Looking…' : 'Find buildings'}
+                </Button>
               </form>
             </div>
           )}
-        </section>
+        </Card>
       )}
-    </div>
+    </>
   );
 }

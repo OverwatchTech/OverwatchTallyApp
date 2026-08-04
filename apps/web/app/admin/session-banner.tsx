@@ -7,6 +7,10 @@
 // grant is already dead whether or not the tab was ever refreshed. The banner
 // is alert-colored because an open cross-tenant session IS something being
 // wrong-until-closed (CLAUDE.md #4) — it is not decoration.
+//
+// It sticks to the top of the view rather than sitting above the bar: the
+// shell is a fixed 54px + 100vh grid and the page itself never scrolls, so a
+// strip outside it would be clipped rather than shown.
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { endSupportSession } from './actions';
@@ -38,22 +42,16 @@ export function SessionBanner({
   const expired = remaining <= 0;
 
   return (
-    <div
-      role="status"
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-alert/40 bg-alert/10 px-4 py-2 text-xs"
-    >
-      <span className="text-foreground">
-        Support session on <span className="font-medium">{orgName}</span>
+    <div role="status" className="ow-banner sticky">
+      <span>
+        Support session on <b>{orgName}</b>
       </span>
-      <span className="text-muted">{reason}</span>
-      <span className="machine ml-auto text-foreground">
+      <span className="m">{reason}</span>
+      <span className="m push" style={{ color: 'var(--ink)' }}>
         {expired ? 'expired' : `${formatClock(remaining)} left`}
       </span>
       <form action={endSupportSession}>
-        <button
-          type="submit"
-          className="rounded border border-alert/60 px-2 py-0.5 text-xs text-foreground transition-colors hover:bg-alert/20 focus-visible:outline-2 focus-visible:outline-accent"
-        >
+        <button type="submit" className="ow-btn sm">
           End session
         </button>
       </form>

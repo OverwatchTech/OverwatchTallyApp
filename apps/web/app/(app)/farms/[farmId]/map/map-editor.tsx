@@ -630,14 +630,15 @@ export function MapEditor({
 
   return (
     <>
-      {/* instrument-panel toolbar */}
-      <div className="absolute left-4 top-24 z-10 w-24 rounded-lg border border-hairline bg-card/95">
+      {/* instrument-panel toolbar — same blurred --panel as the map chrome,
+          sitting directly under the tool row it belongs to */}
+      <div className="ow-mappanel ow-drawtools">
         <div
           role="toolbar"
           aria-label="Draw tools"
           aria-orientation="vertical"
           onKeyDown={onToolbarKeyDown}
-          className="flex flex-col p-1"
+          className="grp"
         >
           {TOOLS.map(({ id, label, title, icon }, index) => (
             <button
@@ -654,22 +655,18 @@ export function MapEditor({
                 setTool(id);
               }}
               onFocus={() => setToolbarIndex(index)}
-              className={`flex items-center gap-2 rounded px-2 py-1.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
-                tool === id ? 'text-accent' : 'text-foreground hover:text-accent'
-              }`}
+              className={`ow-drawtool${tool === id ? ' on' : ''}`}
             >
               {icon}
-              <span className="machine text-[10px] uppercase tracking-wide">{label}</span>
+              <span className="lb">{label}</span>
             </button>
           ))}
         </div>
 
         {activeKinds && tool !== 'select' && (
-          <div className="border-t border-hairline p-2">
+          <div className="ow-mapfield">
             <label className="block">
-              <span className="machine block text-[10px] uppercase tracking-wide text-muted">
-                type
-              </span>
+              <span className="k">type</span>
               <select
                 value={toolKinds[tool]}
                 onChange={(event) =>
@@ -678,7 +675,7 @@ export function MapEditor({
                     [tool]: event.target.value as FeatureKind,
                   }))
                 }
-                className="mt-1 w-full rounded border border-hairline bg-background px-1 py-1 text-xs text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+                className="ow-mapselect"
               >
                 {activeKinds.map((kind) => (
                   <option key={kind} value={kind}>
@@ -693,38 +690,38 @@ export function MapEditor({
 
       {/* keyboard-first name prompt for a finished sketch */}
       {pending && (
-        <form
-          onSubmit={savePending}
-          className="absolute left-1/2 top-4 z-20 w-72 -translate-x-1/2 rounded-lg border border-hairline bg-card/95 p-3"
-        >
-          <label htmlFor="pending-name" className="block text-xs text-muted">
-            Name this {KIND_LABELS[pending.kind]}
-          </label>
-          <input
-            id="pending-name"
-            autoFocus
-            value={nameValue}
-            onChange={(event) => setNameValue(event.target.value)}
-            onFocus={(event) => event.target.select()}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.preventDefault();
-                event.stopPropagation();
-                cancelPending();
-              }
-            }}
-            className="mt-1.5 w-full rounded border border-hairline bg-background px-2 py-1 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-accent"
-          />
-          {formError && <p className="mt-1.5 text-xs text-alert">{formError}</p>}
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded border border-accent px-2 py-1 text-xs text-accent transition-colors hover:bg-accent/10 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
-            >
-              Save {KIND_LABELS[pending.kind]}
-            </button>
-            <span className="machine text-[10px] text-muted">enter saves · esc cancels</span>
+        <form onSubmit={savePending} className="ow-mappanel ow-nameprompt">
+          <div className="bd">
+            <label htmlFor="pending-name" className="k" style={{ display: 'block' }}>
+              Name this {KIND_LABELS[pending.kind]}
+            </label>
+            <input
+              id="pending-name"
+              autoFocus
+              value={nameValue}
+              onChange={(event) => setNameValue(event.target.value)}
+              onFocus={(event) => event.target.select()}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  cancelPending();
+                }
+              }}
+              className="ow-mapinput"
+              style={{ marginTop: 5 }}
+            />
+            {formError && (
+              <p className="ow-msg crit" style={{ padding: '6px 0 0' }}>
+                {formError}
+              </p>
+            )}
+            <div className="row">
+              <button type="submit" disabled={saving} className="ow-btn pri sm">
+                Save {KIND_LABELS[pending.kind]}
+              </button>
+              <span className="hint">enter saves · esc cancels</span>
+            </div>
           </div>
         </form>
       )}
@@ -751,10 +748,7 @@ export function MapEditor({
       )}
 
       {notice && (
-        <p
-          role="status"
-          className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded border border-hairline bg-card/95 px-3 py-1.5 text-xs text-foreground"
-        >
+        <p role="status" className="ow-mapmsg">
           {notice}
         </p>
       )}
@@ -823,74 +817,82 @@ function FeatureInspector({
           onClose();
         }
       }}
-      className="absolute right-4 top-4 z-10 w-64 rounded-lg border border-hairline bg-card/95 p-4"
+      className="ow-drawer on"
     >
+      <div className="ow-dh">
+        <span className="st" style={{ color: 'var(--sel)' }} aria-hidden="true" />
+        <b>{row.name}</b>
+        <span className="type">{KIND_LABELS[row.kind]}</span>
+      </div>
+
       <form onSubmit={submitDetails}>
-        <label htmlFor="feature-name" className="block text-xs text-muted">
-          Name
-        </label>
-        <input
-          id="feature-name"
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          className="mt-1 w-full rounded border border-hairline bg-background px-2 py-1 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-accent"
-        />
+        <div className="ow-mapfield" style={{ borderTop: 'none' }}>
+          <label htmlFor="feature-name" className="k">
+            Name
+          </label>
+          <input
+            id="feature-name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            className="ow-mapinput"
+          />
+        </div>
 
-        <label htmlFor="feature-kind" className="mt-3 block text-xs text-muted">
-          Type
-        </label>
-        <select
-          id="feature-kind"
-          value={kind}
-          disabled={!editableType}
-          onChange={(event) => setKind(event.target.value as FeatureKind)}
-          className="mt-1 w-full rounded border border-hairline bg-background px-2 py-1 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
-        >
-          {kindOptions.map((option) => (
-            <option key={option} value={option}>
-              {KIND_LABELS[option]}
-            </option>
-          ))}
-        </select>
+        <div className="ow-mapfield">
+          <label htmlFor="feature-kind" className="k">
+            Type
+          </label>
+          <select
+            id="feature-kind"
+            value={kind}
+            disabled={!editableType}
+            onChange={(event) => setKind(event.target.value as FeatureKind)}
+            className="ow-mapselect"
+          >
+            {kindOptions.map((option) => (
+              <option key={option} value={option}>
+                {KIND_LABELS[option]}
+              </option>
+            ))}
+          </select>
+        </div>
 
-        <button
-          type="submit"
-          disabled={busy}
-          className="mt-3 w-full rounded border border-accent px-2 py-1 text-xs text-accent transition-colors hover:bg-accent/10 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
-        >
-          Save {KIND_LABELS[kind]}
-        </button>
+        <div className="ow-acts">
+          <button type="submit" disabled={busy} className="ow-btn pri">
+            Save {KIND_LABELS[kind]}
+          </button>
+          <button type="button" onClick={onClose} className="ow-btn">
+            Close
+          </button>
+        </div>
       </form>
 
       {message && (
-        <p
-          role="status"
-          className={`mt-2 text-xs ${message === 'Saved.' ? 'text-muted' : 'text-alert'}`}
-        >
+        <p role="status" className={`ow-msg${message === 'Saved.' ? '' : ' crit'}`}>
           {message}
         </p>
       )}
 
-      <div className="mt-4 border-t border-hairline pt-3">
+      <div className="ow-danger">
         {needsTypedConfirm ? (
           confirming ? (
             <div>
-              <label htmlFor="confirm-delete" className="block text-xs text-muted">
-                Type <span className="machine text-foreground">{row.name}</span> to confirm
+              <label htmlFor="confirm-delete" className="warn">
+                Type <span className="machine">{row.name}</span> to confirm
               </label>
               <input
                 id="confirm-delete"
                 autoFocus
                 value={confirmName}
                 onChange={(event) => setConfirmName(event.target.value)}
-                className="mt-1 w-full rounded border border-hairline bg-background px-2 py-1 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-alert"
+                className="ow-mapinput"
               />
-              <div className="mt-2 flex gap-2">
+              <div className="ow-acts" style={{ border: 'none', padding: '9px 0 0' }}>
                 <button
                   type="button"
                   disabled={busy || confirmName.trim() !== row.name}
                   onClick={runDelete}
-                  className="flex-1 rounded border border-alert px-2 py-1 text-xs text-alert transition-colors hover:bg-alert/10 focus-visible:outline-2 focus-visible:outline-alert disabled:opacity-40"
+                  className="ow-btn danger"
                 >
                   Delete {row.name}
                 </button>
@@ -900,7 +902,7 @@ function FeatureInspector({
                     setConfirming(false);
                     setConfirmName('');
                   }}
-                  className="rounded border border-hairline px-2 py-1 text-xs text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+                  className="ow-btn"
                 >
                   Keep it
                 </button>
@@ -910,7 +912,7 @@ function FeatureInspector({
             <button
               type="button"
               onClick={() => setConfirming(true)}
-              className="w-full rounded border border-hairline px-2 py-1 text-xs text-foreground transition-colors hover:border-alert hover:text-alert focus-visible:outline-2 focus-visible:outline-alert"
+              className="ow-btn block danger"
             >
               Delete {row.name}
             </button>
@@ -920,20 +922,12 @@ function FeatureInspector({
             type="button"
             disabled={busy}
             onClick={runDelete}
-            className="w-full rounded border border-hairline px-2 py-1 text-xs text-foreground transition-colors hover:border-alert hover:text-alert focus-visible:outline-2 focus-visible:outline-alert disabled:opacity-50"
+            className="ow-btn block danger"
           >
             Delete {row.name}
           </button>
         )}
       </div>
-
-      <button
-        type="button"
-        onClick={onClose}
-        className="mt-3 w-full rounded border border-hairline px-2 py-1 text-xs text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
-      >
-        Close
-      </button>
     </aside>
   );
 }

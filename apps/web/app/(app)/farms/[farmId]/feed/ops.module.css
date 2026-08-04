@@ -1,0 +1,380 @@
+/*
+  Local styling for the Feed and Forecast screens.
+
+  Everything the mockup already names lives in apps/web/app/globals.css under
+  the `ow-` namespace, and this file does not duplicate any of it. What is
+  here is only what the mockup has no class for:
+
+    1. the screen header row and its nav pills — a stand-in until AppShell
+       lands in app/(app)/layout.tsx and the four-tab bar carries this;
+    2. the forecast screen's disclosure furniture — the "Why this number"
+       details, the assumption list, the source badges, the input echo, and
+       the two-up panel that shows weather-adjusted beside raw.
+
+  Every value is taken from the mockup's own scale rather than invented:
+  10.5px uppercase micro-labels at .08em in --ink3, 11.5px body in --ink2,
+  11px mono in --ink3 for machine text, 1px --line rules, and a DASHED rule
+  only where the mockup uses one — to mark a caveat, never a fact.
+
+  This is deliberately not in globals.css: five screens are converting at
+  once and a shared file is a merge conflict waiting to happen. If the
+  coordinator wants these promoted, they are self-contained.
+*/
+
+/* ---------------------------------------------------------------- header */
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+/* .ow-pagesub already carries the 18px bottom margin. */
+.headText {
+  min-width: 0;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* --------------------------------------------------------------- prose */
+
+/* The paragraph that tells the reader how to read the screen. */
+.lead {
+  font-size: 12.5px;
+  color: var(--ink2);
+  line-height: 1.6;
+  max-width: 80ch;
+  margin-bottom: 16px;
+}
+.lead b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* An explanation sitting above a table inside a card body. */
+.prose {
+  font-size: 11.5px;
+  color: var(--ink3);
+  line-height: 1.55;
+  max-width: 80ch;
+}
+
+/* An empty state or a plain-language answer in a card body. */
+.hint {
+  font-size: 12.5px;
+  color: var(--ink2);
+  line-height: 1.6;
+  max-width: 80ch;
+}
+
+.hintTitle {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.stack {
+  display: grid;
+  gap: 12px;
+}
+
+/* --------------------------------------------------- two-up fact panels */
+
+.panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+@media (max-width: 700px) {
+  .panels {
+    grid-template-columns: 1fr;
+  }
+}
+.panel {
+  background: var(--card);
+  padding: 13px 16px;
+}
+.panelK {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+}
+.panelV {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-top: 5px;
+}
+.panelS {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--ink3);
+  margin-top: 3px;
+}
+/* When there is no adjusted number, the reason takes the panel's place. */
+.panelWhy {
+  font-size: 11.5px;
+  color: var(--ink2);
+  line-height: 1.55;
+  margin-top: 6px;
+}
+
+/* Three-up figures — "when to order". */
+.trio {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.trio > div {
+  background: var(--card);
+  padding: 13px 16px;
+}
+
+/* ------------------------------------------------------ machine values */
+
+/* A number this system PROJECTS. Hay, and only here (CLAUDE.md #4). */
+.projected {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--hay);
+}
+/* A number this system MEASURED. Never hay — it is not a projection. */
+.measured {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+/* ------------------------------------------- "Why this number" details */
+
+/*
+  Rendered inside a Card's `note`, so `.ow-note` already supplies the 11px/17px
+  padding and the dashed top rule that marks this as a footnote. Nothing here
+  re-adds either.
+*/
+.why {
+  display: block;
+}
+.whySummary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--ink2);
+  font-size: 11.5px;
+  font-weight: 600;
+  transition: color 0.12s;
+}
+.whySummary::-webkit-details-marker {
+  display: none;
+}
+.whySummary:hover {
+  color: var(--ink);
+}
+.whySummary:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.whyBody {
+  margin-top: 11px;
+  display: grid;
+  gap: 11px;
+}
+/* A `Why` that cannot be a card footer — inside a list item, say. Same
+   dashed rule, because it is the same kind of thing. */
+.whyInline {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--line);
+}
+.whyConfidence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.whyReasons {
+  font-size: 11px;
+  color: var(--ink3);
+  line-height: 1.5;
+}
+
+.confidence {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.confidenceHigh {
+  color: var(--ok);
+}
+.confidenceMid {
+  color: var(--ink2);
+}
+.confidenceNone {
+  color: var(--ink3);
+}
+
+/* ------------------------------------------------------ assumption list */
+
+.alist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.arow {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.abody {
+  min-width: 0;
+  flex: 1 1 240px;
+}
+.alabel {
+  font-size: 11.5px;
+  color: var(--ink2);
+  line-height: 1.5;
+}
+.avalue {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.adetail {
+  font-size: 11px;
+  color: var(--ink3);
+  line-height: 1.5;
+  margin-top: 2px;
+}
+
+/*
+  The source of an assumption is the loudest thing about it. "You set 87% dry
+  matter" and "we assumed 87% dry matter" are different claims and must never
+  look the same, so `default` gets a dotted outline and full-strength ink
+  while the rest stay quiet.
+*/
+.src {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 99px;
+  white-space: nowrap;
+  flex: none;
+  margin-top: 1px;
+  border: 1px solid transparent;
+}
+.srcCaller {
+  background: rgba(45, 212, 167, 0.14);
+  color: var(--ok);
+}
+.srcDefault {
+  border: 1px dotted var(--line2);
+  color: var(--ink);
+}
+.srcQuiet {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink3);
+}
+
+/* --------------------------------------------------------- input echo */
+
+.inputs {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+}
+.inputRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 11px;
+  border-bottom: 1px solid var(--line);
+}
+.inputRow:last-child {
+  border-bottom: none;
+}
+.inputK {
+  font-size: 11px;
+  color: var(--ink3);
+  line-height: 1.45;
+}
+.inputV {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  color: var(--ink);
+  text-align: right;
+}
+
+/* --------------------------------------------------------------- chart */
+
+/* The mockup's `.axis` and `.gl`, applied to Recharts' generated SVG. */
+.axis {
+  font-family: var(--mono);
+  font-size: 10px;
+  fill: var(--ink3);
+}
+.chart {
+  height: 250px;
+  width: 100%;
+}
+
+/* ------------------------------------------------------------- anomaly */
+
+.anomalies {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.anomaly {
+  font-size: 12.5px;
+  color: var(--ink);
+  line-height: 1.6;
+}
+
+/* The rolled-up row of a table is a different kind of row and says so. */
+.totalRow td {
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+/* The closing line of a screen. */
+.foot {
+  font-size: 11.5px;
+  color: var(--ink3);
+  margin-top: 4px;
+}
+.foot a {
+  color: var(--ok);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

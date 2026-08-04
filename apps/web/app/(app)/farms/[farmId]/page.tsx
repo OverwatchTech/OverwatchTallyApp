@@ -1,38 +1,79 @@
-// /farms/[farmId] — the shop-monitor screen. Left open on a wall display in
-// the office, so it answers the four standing questions without a click:
-// how many head are on feed, how long the feed lasts, how much water went
+// /farms/[farmId] — the Overview tab. The shop-monitor screen, rebuilt to the
+// owner's approved mockup (docs/reference/portal-mockup.html, `#v-home`):
+// greeting, a one-line situation summary, then the single most important
+// finding written as a sentence, then the KPI row, then the two-column body.
+// It answers the standing questions without a click: how many head are on
+// feed, how much they ate, how long the hay lasts, how much water went
 // through today, and whether anything is actually wrong.
 //
-// Semantics (CLAUDE.md #4): head and water-today are measured, so they render
-// foreground/water. Days of feed on hand is a PROJECTION so it renders hay and
-// says "estimate" out loud. Alert orange appears only when an alert is actually
-// open; a farm with nothing wrong shows a muted zero, never a decorative orange
-// one.
+// PRESENTATION ONLY. Every figure on this screen is one the page already
+// loaded. `getFarmOverview` still owns head, water, open alerts, the activity
+// feed and the pen tiles; `loadDaysOfFeed` (via that same call) still owns the
+// feed rate and the runway. Nothing here recomputes a number, rounds one
+// differently, or invents a threshold.
 //
-// The days-of-feed figure is NOT computed here and is not this screen's own
-// opinion. It comes from `computeDaysOfFeed` (lib/ops/days-of-feed.ts) — the
-// same function, window, waste factor, and weather adjustment the feed screen
-// and the forecast screen use — because four surfaces answering "how much hay
-// is left" four different ways is the fastest way to lose a rancher's trust.
-// A small card shows the central figure with the band beneath it; the full
-// treatment, with every assumption, lives one click away on the forecast screen.
+// Semantics (CLAUDE.md #4): head and water are measured. Feed runway is a
+// PROJECTION, so it renders hay and says "estimate" out loud — it turns crit
+// only when THIS FARM'S OWN days_on_hand_low alert is open, so the badge
+// reflects the threshold the operation configured rather than one this screen
+// made up. Attention is coloured by the WORST open severity — crit if
+// anything critical is open, amber otherwise — so one finding cannot read red
+// in the callout and amber in the KPI on the same screen; a farm with nothing
+// wrong shows a neutral zero and no callout at all, because absence is
+// information and colour is never decorative.
+//
+// TWO SMALL READS LIVE HERE that getFarmOverview does not do: the currently
+// open alerts (kind and severity — for the callout's wording and the runway
+// badge) and the last state of each gate (for the situation line's gate
+// clause). Neither changes a number: the open-alert COUNT still comes from
+// overview.openAlerts, and the alert rows are used for words only.
 
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { formatMeasure } from '@overwatch/ui';
+import {
+  ActivityRow,
+  Badge,
+  Callout,
+  Card,
+  Cols,
+  Kpi,
+  KpiGrid,
+  Pad,
+  PageHeader,
+  formatMeasure,
+} from '@overwatch/ui';
 import { createClient } from '@/lib/supabase/server';
 import { claimsFromSession, isManagerOrOwner } from '@/lib/auth/claims';
 import { formatTier } from '@/lib/format';
 import { daysBandLabel } from '@/lib/ops/days-of-feed';
 import { getFarmOverview } from '@/lib/dashboard/overview';
-import { formatDayClock } from '@/lib/dashboard/timezone';
+import { formatDayClock, localHour } from '@/lib/dashboard/timezone';
+import { KIND_COPY, kindLabel } from '@/lib/alerts/rules';
 import { FarmForm } from './farm-form';
 
-const OPS_TABS = [
-  { slug: 'feed', label: 'Feed' },
-  { slug: 'water', label: 'Water' },
-  { slug: 'movement', label: 'Movement' },
-] as const;
+/**
+ * "1,514 gal" -> { value: "1,514", unit: "gal" } for the Kpi's small trailing
+ * unit slot. formatMeasure still produces the number; this only decides where
+ * the line breaks visually.
+ */
+function splitMeasure(text: string): { value: string; unit: string | undefined } {
+  const at = text.lastIndexOf(' ');
+  if (at === -1) return { value: text, unit: undefined };
+  return { value: text.slice(0, at), unit: text.slice(at + 1) };
+}
+
+/** Time of day in the farm's own timezone, not the reader's and not the server's. */
+function greeting(hour: number): string {
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+const SEVERITY_TONE: Record<string, 'crit' | 'warn' | 'info'> = {
+  critical: 'crit',
+  warn: 'warn',
+  info: 'info',
+};
 
 export default async function FarmPage({ params }: { params: Promise<{ farmId: string }> }) {
   const { farmId } = await params;
@@ -44,240 +85,404 @@ export default async function FarmPage({ params }: { params: Promise<{ farmId: s
   const tz = farm.timezone;
   const band = daysBandLabel(daysOfFeed.leading);
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  const canEdit = isManagerOrOwner(claimsFromSession(session).memberRole);
+  const [{ data: session }, openAlertsRes, gateRes] = await Promise.all([
+    supabase.auth.getSession(),
+    // Words only. `overview.openAlerts` remains the count of record.
+    supabase
+      .from('alerts')
+      .select('id, kind, severity, opened_at')
+      .eq('farm_id', farmId)
+      .is('resolved_at', null)
+      .neq('kind', 'mdp_system_messages')
+      .order('opened_at', { ascending: false })
+      .limit(60),
+    // Latest swing per gate, for the situation line's gate clause.
+    supabase
+      .from('gate_events')
+      .select('gate_feature_id, state, occurred_at')
+      .eq('farm_id', farmId)
+      .order('occurred_at', { ascending: false })
+      .limit(400),
+  ]);
+  const canEdit = isManagerOrOwner(claimsFromSession(session.session).memberRole);
 
-  const alertsOpen = overview.openAlerts > 0;
+  const open = openAlertsRes.data ?? [];
+  const critCount = open.filter((a) => a.severity === 'critical').length;
+  const warnCount = open.filter((a) => a.severity === 'warn').length;
+  const infoCount = open.filter((a) => a.severity === 'info').length;
+  // The farm's own days_on_hand_low alert is what makes the runway "short" —
+  // this screen does not carry a threshold of its own. Its SEVERITY drives
+  // both the rail and the badge, so the KPI and the callout below cannot end
+  // up shouting different things about one finding: red here while the engine
+  // that raised it said "warn" would be this screen overruling the rule the
+  // operation configured.
+  const feedAlert = open.find((a) => a.kind === 'days_on_hand_low') ?? null;
+  const feedTone = feedAlert === null ? null : (SEVERITY_TONE[feedAlert.severity] ?? 'warn');
+  const feedRail = feedTone === 'crit' ? 'crit' : feedTone === 'warn' ? 'warn' : 'hay';
+
+  // What is most wrong. Anything critical leads; failing that a short stack
+  // leads, because it is the one finding with a deadline attached; failing
+  // that, the newest open alert. `open` arrives newest-first.
+  const lead = open.find((a) => a.severity === 'critical') ?? feedAlert ?? open[0] ?? null;
+
+  // Gate state: last event per gate wins.
+  const lastGateState = new Map<string, string>();
+  for (const row of gateRes.data ?? []) {
+    const id = row.gate_feature_id;
+    if (!id || lastGateState.has(id)) continue;
+    lastGateState.set(id, row.state);
+  }
+  const gatesKnown = lastGateState.size;
+  const gatesOpen = [...lastGateState.values()].filter((s) => s === 'open').length;
+
+  // Last feeding, taken from the pen tiles below so the two never disagree.
+  const lastFedAt = pens.reduce<string | null>(
+    (latest, pen) =>
+      pen.lastFedAt !== null && (latest === null || pen.lastFedAt > latest)
+        ? pen.lastFedAt
+        : latest,
+    null,
+  );
+
+  const rate = daysOfFeed.rate;
+  const fedPerDay = rate.kgPerDay === null ? null : splitMeasure(formatMeasure(rate.kgPerDay, 'kg', { digits: 0 }));
+  const water =
+    overview.waterTodayL === null
+      ? null
+      : splitMeasure(formatMeasure(overview.waterTodayL, 'l', { digits: 0 }));
+
+  const attentionSub = [
+    critCount > 0 ? `${critCount} critical` : null,
+    warnCount > 0 ? `${warnCount} to watch` : null,
+    infoCount > 0 ? `${infoCount} for information` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(' · ');
+
+  const forecastHref = `/farms/${farm.id}/forecast`;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <header className="space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="type-display text-xl">{farm.name}</h1>
-            <p className="machine mt-2 text-xs text-muted">
-              {farm.status}
-              {farm.tier ? ` · ${formatTier(farm.tier)}` : ''}
-              {` · ${tz}`}
-            </p>
-          </div>
-          {/* Map, KML, and boundary entry points. Import and boundary are
-              manager surfaces, so they appear only when they'd work; Download
-              streams the caller's RLS-scoped view from the KML route. */}
-          <div className="flex shrink-0 flex-wrap gap-2">
-            <Link
-              href={`/farms/${farm.id}/map`}
-              className="rounded-md border border-hairline px-3 py-1.5 text-sm text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              Open map
-            </Link>
-            <a
-              href={`/api/farms/${farm.id}/kml`}
-              className="rounded-md border border-hairline px-3 py-1.5 text-sm text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              Download KML
-            </a>
-            {canEdit && (
+    <Pad>
+      <PageHeader
+        title={`${greeting(localHour(new Date(), tz))} — here’s the tally`}
+        sub={
+          <>
+            <b>{farm.name}</b> · {farm.status}
+            {farm.tier ? ` · ${formatTier(farm.tier)}` : ''} · {tz} ·{' '}
+            {overview.headOnFeed !== null ? (
               <>
-                <Link
-                  href={`/farms/${farm.id}/import`}
-                  className="rounded-md border border-hairline px-3 py-1.5 text-sm text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
-                >
-                  Import KML
-                </Link>
-                <Link
-                  href={`/farms/${farm.id}/boundary`}
-                  className="rounded-md border border-hairline px-3 py-1.5 text-sm text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
-                >
-                  Set boundary
-                </Link>
+                <b>{overview.headOnFeed.toLocaleString('en-US')} head</b>
+                {pens.length > 0 ? (
+                  <>
+                    {' '}
+                    across <b>{pens.length}</b> pen{pens.length === 1 ? '' : 's'}
+                  </>
+                ) : null}
+              </>
+            ) : (
+              <b>no cattle placed</b>
+            )}{' '}
+            ·{' '}
+            {lastFedAt !== null ? (
+              <>
+                last fed <b>{formatDayClock(lastFedAt, tz)}</b>
+              </>
+            ) : (
+              <>no feeding logged yet</>
+            )}{' '}
+            ·{' '}
+            {gatesKnown === 0 ? (
+              <>no gate swings logged</>
+            ) : gatesOpen === 0 ? (
+              <>
+                all <b>{gatesKnown}</b> gate{gatesKnown === 1 ? '' : 's'} closed
+              </>
+            ) : (
+              <>
+                <b>{gatesOpen}</b> of {gatesKnown} gate{gatesKnown === 1 ? '' : 's'} open
               </>
             )}
-          </div>
-        </div>
+          </>
+        }
+      />
 
-        <nav className="flex gap-1 border-b border-hairline" aria-label="Farm operations">
-          <span
-            aria-current="page"
-            className="border-b-2 border-accent px-3 py-2 text-sm font-medium text-foreground"
-          >
-            Overview
-          </span>
-          {OPS_TABS.map((tab) => (
+      {/* The one finding that matters. Nothing open, nothing rendered — a
+          reassuring green box on a quiet farm teaches the reader to ignore
+          this slot on the day it finally has something in it. */}
+      {lead !== null ? (
+        <Callout
+          tone={SEVERITY_TONE[lead.severity] ?? 'warn'}
+          action={
             <Link
-              key={tab.slug}
-              href={`/farms/${farm.id}/${tab.slug}`}
-              className="border-b-2 border-transparent px-3 py-2 text-sm text-muted transition-colors hover:text-foreground"
+              className="ow-btn sm"
+              href={lead.kind === 'days_on_hand_low' ? forecastHref : '/alerts'}
+              style={{ display: 'inline-block', flex: 'none' }}
             >
-              {tab.label}
+              {lead.kind === 'days_on_hand_low' ? 'What went into this' : 'Open alerts'} →
             </Link>
-          ))}
-        </nav>
-      </header>
+          }
+        >
+          <b>{kindLabel(lead.kind)}</b>
+          {lead.kind === 'days_on_hand_low' && daysOfFeed.leading.days !== null ? (
+            <>
+              {' — '}
+              <b>{daysOfFeed.leading.days.toFixed(1)} days</b> of feed on hand.{' '}
+              {KIND_COPY.days_on_hand_low.watches}
+              {band !== null ? (
+                <>
+                  {' '}
+                  The band runs <b>{band}</b>
+                  {rate.kgPerDay !== null ? (
+                    <>
+                      {' '}
+                      at <b>{formatMeasure(rate.kgPerDay, 'kg', { digits: 0 })}</b> a day,
+                      measured over <b>{rate.daysCounted}</b> of the last {rate.windowDays}{' '}
+                      days
+                    </>
+                  ) : null}
+                  .
+                </>
+              ) : null}{' '}
+              {daysOfFeed.waste.scope === 'default' ? (
+                <>
+                  Waste between the stack and the animal is allowed for at{' '}
+                  <b>{Math.round(daysOfFeed.waste.wasteFactor * 100)}%</b> — the published
+                  ground-feeding midpoint, which nobody on this farm has set.
+                </>
+              ) : (
+                <>
+                  Waste between the stack and the animal is allowed for at{' '}
+                  <b>{Math.round(daysOfFeed.waste.wasteFactor * 100)}%</b>, set for this farm.
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              {'. '}
+              {KIND_COPY[lead.kind]?.watches ?? ''} It opened{' '}
+              <b>{formatDayClock(lead.opened_at, tz)}</b>
+              {open.length > 1 ? (
+                <>
+                  , and <b>{open.length - 1}</b> other alert
+                  {open.length - 1 === 1 ? ' is' : 's are'} open
+                </>
+              ) : null}
+              .
+            </>
+          )}
+        </Callout>
+      ) : null}
 
-      {/* ── The four standing numbers ── */}
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Head on feed</p>
-          <p className="machine mt-1 text-lg text-foreground">
-            {overview.headOnFeed !== null ? overview.headOnFeed.toLocaleString('en-US') : '—'}
-          </p>
-          <p className="text-xs text-faint">
-            {pens.length > 0 ? `across ${pens.length} pen${pens.length === 1 ? '' : 's'}` : 'no cattle placed'}
-          </p>
-        </div>
+      {/* ── The five standing numbers ── */}
+      <KpiGrid>
+        <Kpi
+          accent="ok"
+          label="Head on feed"
+          value={
+            overview.headOnFeed !== null ? overview.headOnFeed.toLocaleString('en-US') : '—'
+          }
+          sub={
+            pens.length > 0
+              ? `across ${pens.length} pen${pens.length === 1 ? '' : 's'}`
+              : 'no cattle placed'
+          }
+        />
 
-        {/* Projection — hay, and it says so. One figure, the band beneath it:
-            a small card has no room for the full treatment, and a truncated
-            range reads as a promise the band does not make. The forecast
-            screen carries the whole thing. */}
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Days of feed on hand</p>
-          <p className="machine mt-1 text-lg text-hay">
-            {daysOfFeed.leading.days !== null ? daysOfFeed.leading.days.toFixed(1) : '—'}
-          </p>
-          <p className="text-xs text-hay/70">
-            {band !== null
-              ? `estimate · ${band}`
-              : daysOfFeed.rate.kgPerDay !== null
-                ? `estimate · at ${formatMeasure(daysOfFeed.rate.kgPerDay, 'kg', { digits: 0 })}/day`
-                : 'estimate · needs a feeding rate'}
-          </p>
-          <p className="mt-1 text-xs text-faint">
-            <Link
-              href={`/farms/${farm.id}/forecast`}
-              className="underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              What went into this
-            </Link>
-          </p>
-        </div>
+        {/* Measured, not projected — but it is hay, and the mockup colours the
+            hay column hay across Fed / Inventory / Runway. */}
+        <Kpi
+          accent="hay"
+          label="Fed per day"
+          value={fedPerDay?.value ?? '—'}
+          unit={fedPerDay?.unit}
+          sub={
+            rate.kgPerDay !== null
+              ? `measured · ${rate.daysCounted} of the last ${rate.windowDays} days logged`
+              : 'no feeding logged yet'
+          }
+        />
 
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Water today</p>
-          <p className="machine mt-1 text-lg text-water">
-            {overview.waterTodayL !== null
-              ? formatMeasure(overview.waterTodayL, 'l', { digits: 0 })
-              : '—'}
-          </p>
-          {/* NOT "metered". The volume is a pulse delta multiplied by a
-              litres-per-pulse factor, and there is not one row in
-              device_calibrations on any farm yet — so that multiplier is a
-              documented default nobody has checked against a real meter. It
-              currently implies ~27 gal/head/day against a sane 6-15, i.e.
-              wrong by roughly 2x. Calling it "metered" would assert the
-              measured semantic (CLAUDE.md #4) for a number nobody measured.
-              Say estimate until an installer records the meter's pulse rate. */}
-          <p className="text-xs text-faint">
-            {overview.waterTodayL !== null
+        {/* Projection. Hay, "estimate" out loud, and the band beneath — never a
+            truncated range, which reads as a promise the band does not make. */}
+        <Kpi
+          accent={feedRail}
+          label="Feed on hand"
+          badge={
+            feedTone !== null ? (
+              <Badge variant={feedTone === 'crit' ? 'crit' : 'warn'}>SHORT</Badge>
+            ) : undefined
+          }
+          value={
+            daysOfFeed.leading.days !== null ? daysOfFeed.leading.days.toFixed(1) : '—'
+          }
+          unit={daysOfFeed.leading.days !== null ? 'days' : undefined}
+          sub={
+            <>
+              {band !== null
+                ? `estimate · ${band}`
+                : rate.kgPerDay !== null
+                  ? `estimate · at ${formatMeasure(rate.kgPerDay, 'kg', { digits: 0 })}/day`
+                  : 'estimate · needs a feeding rate'}
+              <br />
+              <Link href={forecastHref} style={{ color: 'var(--hay)' }}>
+                What went into this
+              </Link>
+            </>
+          }
+        />
+
+        {/* NOT "metered". The volume is a pulse delta times a litres-per-pulse
+            factor, and there is not one row in device_calibrations on any farm
+            yet — so that multiplier is a documented default nobody has checked
+            against a real meter. Calling it measured would assert a semantic
+            (CLAUDE.md #4) nobody has earned. Say estimate until an installer
+            records the meter's pulse rate. */}
+        <Kpi
+          accent="water"
+          label="Water today"
+          value={water?.value ?? '—'}
+          unit={water?.unit}
+          sub={
+            overview.waterTodayL !== null
               ? 'estimate · meter not calibrated'
-              : 'no water metering yet'}
-          </p>
-        </div>
+              : 'no water metering yet'
+          }
+        />
 
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Open alerts</p>
-          <p className={`machine mt-1 text-lg ${alertsOpen ? 'text-alert' : 'text-muted'}`}>
-            {overview.openAlerts}
-          </p>
-          <p className="text-xs text-faint">
-            {alertsOpen ? (
-              <Link href="/alerts" className="text-alert hover:underline">
-                Open alerts
+        {/* The rail reads the WORST open severity, the same way feedRail reads
+            the severity of the alert that raised it. Hardcoding amber here
+            would print one critical finding red in the callout and in the
+            bar's alert pill and amber in the KPI, on one screen — and a screen
+            that contradicts itself about how bad something is teaches the
+            reader to stop trusting the colour anywhere. The count itself is
+            untouched: `overview.openAlerts` is still the number of record and
+            `critCount` still only chooses words and now a colour. */}
+        <Kpi
+          accent={critCount > 0 ? 'crit' : overview.openAlerts > 0 ? 'warn' : 'neutral'}
+          label="Attention"
+          value={overview.openAlerts}
+          sub={
+            overview.openAlerts > 0 ? (
+              <Link
+                href="/alerts"
+                style={{ color: critCount > 0 ? 'var(--crit)' : 'var(--warn)' }}
+              >
+                {attentionSub || 'open alerts'}
               </Link>
             ) : (
               'nothing needs attention'
-            )}
-          </p>
-        </div>
-      </section>
+            )
+          }
+        />
+      </KpiGrid>
 
-      <div className="grid gap-6 lg:grid-cols-[3fr_2fr]">
+      <Cols>
         {/* ── What happened, newest first ── */}
-        <section className="rounded-lg border border-hairline bg-card p-6">
-          <h2 className="mb-4 text-base font-medium">Recent activity</h2>
+        <Card
+          title="Live activity"
+          sub="feedings · gates · alerts"
+          padded={events.length === 0}
+        >
           {events.length > 0 ? (
-            <ul className="space-y-0">
-              {events.map((event) => (
-                <li
-                  key={event.key}
-                  className="flex items-baseline gap-3 border-b border-hairline/50 py-2 last:border-b-0"
+            events.map((event) => (
+              <ActivityRow
+                key={event.key}
+                dense
+                tone={event.wrong ? 'crit' : 'ok'}
+                meta={formatDayClock(event.at, tz)}
+              >
+                <b>{event.headline}</b>
+                {event.detail !== null ? <> — {event.detail}</> : null}
+              </ActivityRow>
+            ))
+          ) : (
+            <p style={{ color: 'var(--ink2)', lineHeight: 1.55 }}>
+              Nothing logged in the last two weeks. Feedings, gate swings, and alerts land
+              here as they happen.
+            </p>
+          )}
+        </Card>
+
+        <div>
+          {/* ── Pens holding cattle right now ── */}
+          <Card
+            title="Pens"
+            sub={pens.length > 0 ? String(pens.length) : undefined}
+            padded={pens.length === 0}
+          >
+            {pens.length > 0 ? (
+              pens.map((pen) => (
+                <ActivityRow
+                  key={pen.penId}
+                  href={`/farms/${farm.id}/pens/${pen.penId}`}
+                  tone="ok"
+                  meta={pen.head !== null ? `${pen.head.toLocaleString('en-US')} head` : '—'}
                 >
-                  <span className="machine shrink-0 text-xs text-faint tabular-nums">
-                    {formatDayClock(event.at, tz)}
+                  <b>{pen.penName}</b>
+                  <span style={{ display: 'block', color: 'var(--ink3)', fontSize: '11px' }}>
+                    {pen.groupNames.join(' · ')}
                   </span>
-                  <span className={`min-w-0 flex-1 text-sm ${event.wrong ? 'text-alert' : 'text-foreground'}`}>
-                    {event.headline}
+                  <span style={{ display: 'block', color: 'var(--ink3)', fontSize: '11px' }}>
+                    {pen.lastFedAt
+                      ? `fed ${formatDayClock(pen.lastFedAt, tz)}${
+                          pen.lastFedKg !== null
+                            ? ` · ${formatMeasure(pen.lastFedKg, 'kg', { digits: 0 })}`
+                            : ''
+                        }${pen.lastFedSource ? ` · ${pen.lastFedSource}` : ''}`
+                      : 'no feeding logged yet'}
                   </span>
-                  {event.detail ? (
-                    <span className="machine shrink-0 text-xs text-muted">{event.detail}</span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted">
-              Nothing logged in the last two weeks. Feedings, gate swings, and alerts land here as
-              they happen.
-            </p>
-          )}
-        </section>
+                </ActivityRow>
+              ))
+            ) : (
+              <p style={{ color: 'var(--ink2)', lineHeight: 1.55 }}>
+                No group is placed in a pen right now. Pens show up here once cattle are
+                moved in.
+              </p>
+            )}
+          </Card>
 
-        {/* ── Pens holding cattle right now ── */}
-        <section className="rounded-lg border border-hairline bg-card p-6">
-          <h2 className="mb-4 text-base font-medium">Pens</h2>
-          {pens.length > 0 ? (
-            <ul className="space-y-2">
-              {pens.map((pen) => (
-                <li key={pen.penId}>
-                  <Link
-                    href={`/farms/${farm.id}/pens/${pen.penId}`}
-                    className="block rounded-md border border-hairline p-3 transition-colors hover:border-accent focus-visible:outline-2 focus-visible:outline-accent"
-                  >
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-sm text-foreground">{pen.penName}</span>
-                      <span className="machine text-sm text-foreground">
-                        {pen.head !== null ? `${pen.head.toLocaleString('en-US')} head` : '—'}
-                      </span>
-                    </div>
-                    <p className="mt-1 truncate text-xs text-muted">{pen.groupNames.join(' · ')}</p>
-                    <p className="machine mt-1 text-xs text-faint">
-                      {pen.lastFedAt
-                        ? `fed ${formatDayClock(pen.lastFedAt, tz)}${
-                            pen.lastFedKg !== null
-                              ? ` · ${formatMeasure(pen.lastFedKg, 'kg', { digits: 0 })}`
-                              : ''
-                          }${pen.lastFedSource ? ` · ${pen.lastFedSource}` : ''}`
-                        : 'no feeding logged yet'}
-                    </p>
+          {/* Map, KML and boundary entry points. The four tabs cover the daily
+              screens; these are the occasional ones, and Import and Set
+              boundary appear only when they would work. */}
+          <Card title="This farm" sub={'records & setup'}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <Link className="ow-btn sm" href={`/farms/${farm.id}/map`}>
+                Open map
+              </Link>
+              <Link className="ow-btn sm" href={`/farms/${farm.id}/movement`}>
+                Movement
+              </Link>
+              <Link className="ow-btn sm" href={forecastHref}>
+                Forecast
+              </Link>
+              <a className="ow-btn sm" href={`/api/farms/${farm.id}/kml`}>
+                Download KML
+              </a>
+              {canEdit ? (
+                <>
+                  <Link className="ow-btn sm" href={`/farms/${farm.id}/import`}>
+                    Import KML
                   </Link>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted">
-              No group is placed in a pen right now. Pens show up here once cattle are moved in.
-            </p>
-          )}
-        </section>
-      </div>
+                  <Link className="ow-btn sm" href={`/farms/${farm.id}/boundary`}>
+                    Set boundary
+                  </Link>
+                </>
+              ) : null}
+            </div>
+          </Card>
 
-      {/* ── Farm details ── */}
-      {canEdit ? (
-        <section className="rounded-lg border border-hairline bg-card p-6">
-          <h2 className="mb-4 text-base font-medium">Farm details</h2>
-          <FarmForm farmId={farm.id} name={farm.name} timezone={tz} />
-        </section>
-      ) : (
-        <section className="rounded-lg border border-hairline bg-card p-6">
-          <h2 className="mb-1 text-base font-medium">Farm details</h2>
-          <p className="text-sm text-muted">
-            Name and timezone changes need a manager or the owner.
-          </p>
-        </section>
-      )}
-    </div>
+          {/* ── Farm details ── */}
+          <Card title="Farm details">
+            {canEdit ? (
+              <FarmForm farmId={farm.id} name={farm.name} timezone={tz} />
+            ) : (
+              <p style={{ color: 'var(--ink2)', lineHeight: 1.55 }}>
+                Name and timezone changes need a manager or the owner.
+              </p>
+            )}
+          </Card>
+        </div>
+      </Cols>
+    </Pad>
   );
 }

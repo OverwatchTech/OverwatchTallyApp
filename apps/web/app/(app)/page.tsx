@@ -1,15 +1,20 @@
-import Link from "next/link";
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
-import { formatTier } from "@/lib/format";
+// "/" — the farm chooser. A single-farm account never sees it: it redirects
+// straight into the farm, which is what makes the bar look like the mockup for
+// almost everybody. Multi-farm accounts land here, and the farm picker beside
+// the brand mark does the same job from every other screen.
+
+import { redirect } from 'next/navigation';
+import { ActivityRow, Card, Pad, PageHeader } from '@overwatch/ui';
+import { createClient } from '@/lib/supabase/server';
+import { formatTier } from '@/lib/format';
 
 export default async function FarmsPage() {
   const supabase = await createClient();
 
   const { data: farms } = await supabase
-    .from("farms")
-    .select("id, name, status, subscription_tier")
-    .order("name");
+    .from('farms')
+    .select('id, name, status, subscription_tier')
+    .order('name');
 
   const onlyFarm = farms && farms.length === 1 ? farms[0] : undefined;
   if (onlyFarm) {
@@ -18,38 +23,44 @@ export default async function FarmsPage() {
 
   if (!farms || farms.length === 0) {
     return (
-      <div className="mx-auto max-w-md rounded-lg border border-hairline bg-card p-6">
-        <h1 className="mb-1 text-base font-medium">No farms yet</h1>
-        <p className="text-sm text-muted">
-          Your farm shows up here once your installer finishes setup.
-        </p>
-      </div>
+      <Pad>
+        <Card title="No farms yet" className="max-w-[460px]">
+          <p style={{ color: 'var(--ink2)', lineHeight: 1.55 }}>
+            Your farm shows up here once your installer finishes setup.
+          </p>
+        </Card>
+      </Pad>
     );
   }
 
   return (
-    <div className="mx-auto max-w-3xl">
-      <h1 className="type-display mb-6 text-xl">Farms</h1>
-      <ul className="grid gap-3 sm:grid-cols-2">
+    <Pad>
+      <PageHeader
+        title="Your farms"
+        sub={
+          <>
+            <b>{farms.length}</b> operations on this account. Pick one to open its
+            tally.
+          </>
+        }
+      />
+      <Card padded={false}>
         {farms.map((farm) => (
-          <li key={farm.id}>
-            <Link
-              href={`/farms/${farm.id}`}
-              className="block rounded-lg border border-hairline bg-card p-4 transition-colors hover:border-accent"
-            >
-              <span className="block text-sm font-medium text-foreground">
-                {farm.name}
-              </span>
-              <span className="machine mt-1 block text-xs text-muted">
+          <ActivityRow
+            key={farm.id}
+            href={`/farms/${farm.id}`}
+            tone="ok"
+            meta={
+              <>
                 {farm.status}
-                {farm.subscription_tier
-                  ? ` · ${formatTier(farm.subscription_tier)}`
-                  : ""}
-              </span>
-            </Link>
-          </li>
+                {farm.subscription_tier ? ` · ${formatTier(farm.subscription_tier)}` : ''}
+              </>
+            }
+          >
+            <b>{farm.name}</b>
+          </ActivityRow>
         ))}
-      </ul>
-    </div>
+      </Card>
+    </Pad>
   );
 }

@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { TabPills } from '@overwatch/ui';
 
 const TABS = [
   { href: '/settings/members', label: 'Members' },
@@ -12,24 +13,15 @@ export function SettingsTabs() {
   const pathname = usePathname();
 
   return (
-    <nav className="flex gap-1 border-b border-hairline" aria-label="Settings">
-      {TABS.map((tab) => {
-        const active = pathname === tab.href || pathname.startsWith(`${tab.href}/`);
-        return (
-          <Link
-            key={tab.href}
-            href={tab.href}
-            aria-current={active ? 'page' : undefined}
-            className={
-              active
-                ? 'border-b-2 border-accent px-3 py-2 text-sm font-medium text-foreground'
-                : 'border-b-2 border-transparent px-3 py-2 text-sm text-muted transition-colors hover:text-foreground'
-            }
-          >
-            {tab.label}
-          </Link>
-        );
-      })}
-    </nav>
+    <TabPills
+      label="Settings"
+      linkAs={Link}
+      items={TABS.map((tab) => ({
+        href: tab.href,
+        label: tab.label,
+        active: pathname === tab.href || pathname.startsWith(`${tab.href}/`),
+      }))}
+      className="ow-tabs-inline"
+    />
   );
 }

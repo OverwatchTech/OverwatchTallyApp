@@ -7,13 +7,14 @@
 // automated (device registration).
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { DataTable, KpiGrid, Pad, PageHeader, type DataTableColumn } from '@overwatch/ui';
 import { requireStaff } from '@/lib/admin/guard';
 import { recordStaffAction } from '@/lib/admin/audit';
 import { readFarmProvisioning } from '@/lib/admin/provisioning';
 import { CONSOLE_ONLY_STEPS } from '@/lib/admin/mdp/types';
 import { MDP_CONSOLE_URL } from '@/lib/admin/fleet';
-import { ROLE_LABELS } from '@/lib/admin/bom';
-import { Chip, Empty, Panel, Stat, buttonClass } from '@/lib/admin/ui';
+import { ROLE_LABELS, type DeviceRole } from '@/lib/admin/bom';
+import { Chip, Empty, FactRow, Facts, Panel, Stat, buttonClass } from '../../console-ui';
 import { relativeTime, shortDateTime } from '@/lib/admin/time';
 import { formatDevEui } from '@/lib/admin/dev-eui';
 import {
@@ -25,6 +26,16 @@ import {
 } from './provisioning-forms';
 
 export const dynamic = 'force-dynamic';
+
+interface DeviceRow {
+  id: string;
+  dev_eui: string;
+  model: string;
+  role: DeviceRole;
+  status: string;
+  mdp_device_id: string | null;
+  last_seen_at: string | null;
+}
 
 export default async function FarmProvisioningPage({
   params,
@@ -52,16 +63,47 @@ export default async function FarmProvisioningPage({
     .eq('farm_id', farmId)
     .order('dev_eui');
 
+  const deviceRows = (devices ?? []) as DeviceRow[];
+
+  const deviceColumns: Array<DataTableColumn<DeviceRow>> = [
+    { key: 'eui', header: 'DevEUI', mono: true, cell: (row) => formatDevEui(row.dev_eui) },
+    {
+      key: 'model',
+      header: 'Model and role',
+      cell: (row) => (
+        <span className="ow-quiet">
+          {row.model} · {ROLE_LABELS[row.role]}
+        </span>
+      ),
+    },
+    {
+      key: 'mdp',
+      header: 'MDP',
+      cell: (row) =>
+        row.mdp_device_id ? <Chip tone="live">in MDP</Chip> : <Chip tone="wrong">not in MDP</Chip>,
+    },
+    { key: 'status', header: 'Status', mono: true, align: 'right', cell: (row) => row.status },
+    {
+      key: 'seen',
+      header: 'Last heard',
+      mono: true,
+      align: 'right',
+      cell: (row) => relativeTime(row.last_seen_at),
+    },
+  ];
+
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="type-display text-xl">{farm.farmName}</h1>
-          <p className="machine mt-2 text-xs text-muted">
-            {farm.status} · {farm.timezone}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
+    <Pad>
+      <div className="ow-inline" style={{ alignItems: 'flex-start', gap: '16px' }}>
+        <PageHeader
+          title={farm.farmName}
+          sub={
+            <span className="ow-machine">
+              {farm.status} · {farm.timezone}
+            </span>
+          }
+        />
+        <div className="ow-inline" style={{ marginLeft: 'auto' }}>
           <Link href={`/admin/orgs/${farm.orgId}`} className={buttonClass()}>
             Account
           </Link>
@@ -74,9 +116,9 @@ export default async function FarmProvisioningPage({
             MDP console
           </a>
         </div>
-      </header>
+      </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <KpiGrid>
         <Stat
           label="Devices"
           value={farm.devices.total}
@@ -94,13 +136,13 @@ export default async function FarmProvisioningPage({
           value={farm.mdpApplicationId ? 'set' : 'missing'}
           tone={farm.mdpApplicationId ? 'live' : 'wrong'}
         />
-      </div>
+      </KpiGrid>
 
       <Panel
         title="Steps Milesight has no API for"
         note="Verified against the published interface list on 3 Aug 2026. These are done by hand in the console; the console records the result."
       >
-        <ol className="divide-y divide-hairline text-sm">
+        <ol className="ow-steplist">
           <Step n={1} done={Boolean(farm.mdpGroupId)} text={CONSOLE_ONLY_STEPS.createGroup} />
           <Step
             n={2}
@@ -112,21 +154,22 @@ export default async function FarmProvisioningPage({
             done={Boolean(farm.webhook)}
             text={CONSOLE_ONLY_STEPS.registerWebhookCallback}
           />
-          <Step n={4} done={Boolean(farm.app)} text="Copy the Server Address, Client ID, and Client Secret from Authentication into the form below." />
+          <Step
+            n={4}
+            done={Boolean(farm.app)}
+            text="Copy the Server Address, Client ID, and Client Secret from Authentication into the form below."
+          />
         </ol>
       </Panel>
 
-      <Panel title="Callback URI" note="Paste this into the Application's webhook settings.">
-        <div className="space-y-2 px-4 py-4">
-          <code className="machine block overflow-x-auto rounded border border-hairline bg-background px-3 py-2 text-xs text-foreground">
-            {farm.callbackUri}
-          </code>
-          <p className="text-xs text-muted">
-            The trailing token is this farm&rsquo;s path secret. Treat the whole URI as a
-            credential.
-          </p>
+      <Panel
+        title="Callback URI"
+        note="Paste this into the Application's webhook settings. The trailing token is this farm's path secret — treat the whole URI as a credential."
+      >
+        <div className="ow-bd">
+          <code className="ow-code">{farm.callbackUri}</code>
         </div>
-        <div className="border-t border-hairline">
+        <div style={{ borderTop: '1px solid var(--line)' }}>
           <RotateTokenForm farmId={farmId} />
         </div>
       </Panel>
@@ -148,12 +191,12 @@ export default async function FarmProvisioningPage({
         }
       >
         {farm.app && (
-          <dl className="divide-y divide-hairline border-b border-hairline text-sm">
-            <Row label="Server address" value={farm.app.serverAddress} />
-            <Row label="Client id" value={farm.app.clientId} />
-            <Row label="Client secret" value={farm.app.clientSecretMasked} />
-            <Row label="Rotated" value={shortDateTime(farm.app.rotatedAt)} />
-          </dl>
+          <Facts>
+            <FactRow label="Server address" value={farm.app.serverAddress} />
+            <FactRow label="Client id" value={farm.app.clientId} />
+            <FactRow label="Client secret" value={farm.app.clientSecretMasked} />
+            <FactRow label="Rotated" value={shortDateTime(farm.app.rotatedAt)} />
+          </Facts>
         )}
         <ApiCredentialsForm farmId={farmId} serverAddress={farm.app?.serverAddress ?? null} />
       </Panel>
@@ -163,11 +206,11 @@ export default async function FarmProvisioningPage({
         note="Undocumented by Milesight but present on the wire: x-msc-webhook-uuid, nonce, timestamp, and an HMAC-SHA256 signature over timestamp ‖ nonce."
       >
         {farm.webhook ? (
-          <dl className="divide-y divide-hairline border-b border-hairline text-sm">
-            <Row label="Webhook id" value={farm.webhook.uuid} />
-            <Row label="Secret" value={farm.webhook.secretMasked} />
-            <Row label="Rotated" value={shortDateTime(farm.webhook.rotatedAt)} />
-          </dl>
+          <Facts>
+            <FactRow label="Webhook id" value={farm.webhook.uuid} />
+            <FactRow label="Secret" value={farm.webhook.secretMasked} />
+            <FactRow label="Rotated" value={shortDateTime(farm.webhook.rotatedAt)} />
+          </Facts>
         ) : (
           <Empty>
             No signing material stored. Deliveries for this farm cannot be verified until it is.
@@ -183,65 +226,30 @@ export default async function FarmProvisioningPage({
         <RegisterDevicesForm farmId={farmId} pending={farm.devices.awaitingMdp} />
       </Panel>
 
-      <Panel title="Devices" note={`${(devices ?? []).length} on this farm`}>
-        {!devices || devices.length === 0 ? (
-          <Empty>
-            No devices. An installer captures them at the pen — there is no self-serve path.
-          </Empty>
-        ) : (
-          <ul className="divide-y divide-hairline">
-            {devices.map((device) => (
-              <li
-                key={device.id}
-                className="flex flex-wrap items-baseline justify-between gap-3 px-4 py-2"
-              >
-                <div className="min-w-0">
-                  <p className="machine text-xs text-foreground">{formatDevEui(device.dev_eui)}</p>
-                  <p className="text-xs text-muted">
-                    {device.model} · {ROLE_LABELS[device.role]}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {device.mdp_device_id ? (
-                    <Chip tone="live">in MDP</Chip>
-                  ) : (
-                    <Chip tone="wrong">not in MDP</Chip>
-                  )}
-                  <span className="machine text-xs text-muted">
-                    {device.status} · {relativeTime(device.last_seen_at)}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+      <Panel title="Devices" note={`${deviceRows.length} on this farm`}>
+        <DataTable
+          caption="Devices registered on this farm"
+          columns={deviceColumns}
+          rows={deviceRows}
+          rowKey={(row) => row.id}
+          maxHeight={460}
+          empty="No devices. An installer captures them at the pen — there is no self-serve path."
+        />
       </Panel>
-    </div>
+    </Pad>
   );
 }
 
 function Step({ n, done, text }: { n: number; done: boolean; text: string }) {
   return (
-    <li className="flex gap-3 px-4 py-3">
-      <span
-        className={`machine shrink-0 text-xs ${done ? 'text-accent' : 'text-muted'}`}
-        aria-hidden
-      >
+    <li>
+      <span className={`n ${done ? 'done' : ''}`} aria-hidden>
         {done ? '✓' : n}
       </span>
-      <span className={`text-xs ${done ? 'text-muted' : 'text-foreground'}`}>
+      <span className={done ? 'ow-quiet' : 'tx'}>
         {text}
         <span className="sr-only">{done ? ' — done' : ' — not done'}</span>
       </span>
     </li>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3 px-4 py-2">
-      <dt className="text-xs text-muted">{label}</dt>
-      <dd className="machine truncate text-xs text-foreground">{value}</dd>
-    </div>
   );
 }

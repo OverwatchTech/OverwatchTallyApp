@@ -154,18 +154,46 @@ export function describeAlert(
     case 'trough_low': {
       const where = place(d, 'a trough');
       const basis = text(d, 'basis');
-      const reading = number(d, 'reading_mm');
       const percent = number(d, 'percent_full');
       const thresholdMm = number(d, 'threshold_mm');
       const thresholdPct = number(d, 'threshold_pct');
+
+      // `reading_mm` first, `level_mm` second — the same fallback, for the
+      // same reason, as supabase/functions/alert-dispatch/render.ts. The
+      // trough condition was fixed to read distance_mm (what the ultrasonic
+      // and radar sensors actually emit) rather than level_mm (which only the
+      // submersible reports, with the opposite sense), and it renamed the
+      // details field on the way through. This screen was still reading the
+      // old name, and because the number is optional in the rendered sentence
+      // it did not break — it just quietly showed a critical low-water alert
+      // with no measurement under it. An alert stripped of its evidence is one
+      // a rancher cannot act on or argue with, which is the whole reason this
+      // file explains itself. The fallback keeps alerts opened before that
+      // migration readable.
+      const migrated = number(d, 'reading_mm');
+      const legacy = migrated === null ? number(d, 'level_mm') : null;
+      const reading = migrated ?? legacy;
 
       // The raw reading is shown whichever test fired — a percentage nobody
       // can check against the tape in their pocket is not evidence. It is
       // labelled off `metric`, never off `basis`, because the metric is what
       // the number physically is.
+      //
+      // A pre-migration row carries no `metric` at all, so the label has to
+      // fall back with the value or the fact drops anyway and the fix buys
+      // nothing. It falls back to the distance reading: the old rule fired on
+      // `value >= max_distance_mm` — greater means emptier — and the copy of
+      // the day printed that number as "Down to water". Reading it any other
+      // way now would re-interpret history, which is not a field-name fix.
       const metric = text(d, 'metric');
       const readingLabel =
-        metric === 'level_mm' ? 'Water depth' : metric === 'distance_mm' ? 'Down to water' : null;
+        metric === 'level_mm'
+          ? 'Water depth'
+          : metric === 'distance_mm'
+            ? 'Down to water'
+            : legacy !== null
+              ? 'Down to water'
+              : null;
 
       // Exactly one threshold, matching the test that fired. `label` is the
       // React key in evidence.tsx, so two facts must never share one.

@@ -10,6 +10,13 @@
 // evidence.tsx. An alert a rancher cannot argue with is an alert a rancher
 // stops reading.
 //
+// COMPOSITION (docs/reference/portal-mockup.html). An open alert is a
+// Callout in its own severity colour — the mockup's one element for "the
+// finding that matters most on this screen" — and the evidence hangs under
+// it in a `.kv` grid with the rule provenance in a DASHED `.note`. The
+// dashed rule is the tell that separates a footnote from a fact; the
+// numbers are facts, the rule that produced them is the footnote.
+//
 // Staff-only alerts (ARCHITECTURE §11 — MDP system messages, ingest health,
 // fleet anomalies) never appear here. The RLS policy hides them and
 // `fetchOpenAlerts` filters them again.
@@ -18,9 +25,19 @@
 // live at /farms/[farmId]/forecast. Orange means something is wrong.
 
 import Link from 'next/link';
+import {
+  Badge,
+  Callout,
+  Card,
+  DataTable,
+  Pad,
+  PageHeader,
+  type CalloutTone,
+  type DataTableColumn,
+} from '@overwatch/ui';
 import { createClient } from '@/lib/supabase/server';
 import { claimsFromSession, isManagerOrOwner } from '@/lib/auth/claims';
-import { describeAlert, severityClass, severityLabel } from '@/lib/alerts/kinds';
+import { describeAlert, severityLabel, type Severity } from '@/lib/alerts/kinds';
 import {
   deliverySummary,
   elapsedLabel,
@@ -34,12 +51,38 @@ import {
 import { fetchRecipients, toContacts, type Contact } from '@/lib/alerts/recipients';
 import { fetchRules, ruleIndex, type RuleRow } from '@/lib/alerts/rules-db';
 import { AcknowledgeForm } from './acknowledge-form';
-import { DeliveryLog, TrippedBy } from './evidence';
+import { DeliveryLog, RuleProvenance, TrippedBy } from './evidence';
 
 /** Crew and up may acknowledge; a viewer reads. RLS is the enforcement. */
 const ACK_ROLES = new Set(['owner', 'manager', 'crew']);
 
-function AlertCard({
+/**
+ * Severity picks the wash. `info` is deliberately NOT orange — orange means
+ * something is actually wrong (CLAUDE.md #4) and a heads-up is not that.
+ */
+function tone(severity: Severity): CalloutTone {
+  switch (severity) {
+    case 'critical':
+      return 'crit';
+    case 'warn':
+      return 'warn';
+    default:
+      return 'info';
+  }
+}
+
+function badge(severity: Severity): 'crit' | 'warn' | 'neutral' {
+  switch (severity) {
+    case 'critical':
+      return 'crit';
+    case 'warn':
+      return 'warn';
+    default:
+      return 'neutral';
+  }
+}
+
+function AlertItem({
   alert,
   rule,
   contacts,
@@ -64,55 +107,66 @@ function AlertCard({
   const delivery = deliverySummary(receipts);
 
   return (
-    <article className="rounded-lg border border-hairline bg-card p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h3 className={`text-base font-medium ${severityClass(alert.severity, false)}`}>
-              {copy.title}
-            </h3>
-            <span className="machine text-xs text-faint">{severityLabel(alert.severity)}</span>
-          </div>
-          <p className="mt-1 max-w-2xl text-sm text-muted">{copy.detail}</p>
-        </div>
-
-        <div className="flex shrink-0 flex-col items-end gap-2">
-          <p className="machine text-xs text-faint">
-            {showFarm && `${alert.farmName} · `}
-            {whenLabel(alert.opened_at, alert.timezone)}
-            {` · open ${elapsedLabel(alert.opened_at)}`}
-          </p>
-          {acknowledged ? (
-            <p className="machine text-xs text-accent">
+    <article className="ow-alertitem">
+      <Callout
+        tone={tone(alert.severity)}
+        icon={alert.severity === 'info' ? 'i' : '!'}
+        action={
+          acknowledged ? (
+            <span className="ow-machine ow-live" style={{ fontSize: '11.5px' }}>
               acknowledged {whenLabel(alert.acknowledged_at, alert.timezone)}
-            </p>
+            </span>
           ) : canAcknowledge ? (
             <AcknowledgeForm alertId={alert.id} />
           ) : (
-            <p className="text-xs text-faint">Crew or higher can acknowledge.</p>
-          )}
-        </div>
-      </div>
+            <span className="ow-quiet">Crew or higher can acknowledge.</span>
+          )
+        }
+      >
+        <b>{copy.title}</b> — {copy.detail}
+      </Callout>
 
-      <TrippedBy facts={copy.facts} rule={rule} canEdit={canEditRules} />
+      <Card
+        title="What tripped it"
+        sub={
+          <span className="ow-machine">
+            {showFarm && `${alert.farmName} · `}
+            {whenLabel(alert.opened_at, alert.timezone)}
+            {` · open ${elapsedLabel(alert.opened_at)}`}
+          </span>
+        }
+        aside={<Badge variant={badge(alert.severity)}>{severityLabel(alert.severity)}</Badge>}
+        padded={false}
+        note={<RuleProvenance rule={rule} canEdit={canEditRules} />}
+      >
+        <TrippedBy facts={copy.facts} />
 
-      <DeliveryLog
-        receipts={receipts}
-        contacts={contacts}
-        timezone={alert.timezone}
-        summary={delivery}
-      />
+        <DeliveryLog
+          receipts={receipts}
+          contacts={contacts}
+          timezone={alert.timezone}
+          summary={delivery}
+        />
 
-      {alert.kind === 'days_on_hand_low' && (
-        <Link
-          href={`/farms/${alert.farm_id}/forecast`}
-          className="mt-3 inline-block text-xs text-accent underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-        >
-          Open the feed forecast
-        </Link>
-      )}
+        {alert.kind === 'days_on_hand_low' && (
+          <div className="ow-listitem tight">
+            <Link href={`/farms/${alert.farm_id}/forecast`} className="ow-btn sm">
+              Open the feed forecast
+            </Link>
+          </div>
+        )}
+      </Card>
     </article>
   );
+}
+
+interface HistoryRow {
+  id: string;
+  title: string;
+  farmName: string;
+  opened: string;
+  acknowledged: string;
+  cleared: string;
 }
 
 export default async function AlertsPage() {
@@ -138,121 +192,111 @@ export default async function AlertsPage() {
 
   const unacknowledged = open.filter((a) => a.acknowledged_at === null).length;
 
+  const historyRows: HistoryRow[] = history.map((alert) => {
+    const copy = describeAlert(alert.kind, alert.details as Record<string, unknown> | null);
+    return {
+      id: alert.id,
+      title: copy.title,
+      farmName: alert.farmName,
+      opened: whenLabel(alert.opened_at, alert.timezone),
+      acknowledged:
+        alert.acknowledged_at === null ? 'no' : whenLabel(alert.acknowledged_at, alert.timezone),
+      cleared: whenLabel(alert.resolved_at, alert.timezone),
+    };
+  });
+
+  const historyColumns: Array<DataTableColumn<HistoryRow>> = [
+    { key: 'what', header: 'What', cell: (row) => row.title },
+  ];
+  if (showFarm) {
+    historyColumns.push({ key: 'farm', header: 'Farm', cell: (row) => row.farmName });
+  }
+  historyColumns.push(
+    { key: 'opened', header: 'Opened', mono: true, align: 'right', cell: (row) => row.opened },
+    {
+      key: 'ack',
+      header: 'Acknowledged',
+      mono: true,
+      align: 'right',
+      cell: (row) => row.acknowledged,
+    },
+    { key: 'cleared', header: 'Cleared', mono: true, align: 'right', cell: (row) => row.cleared },
+  );
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="type-display text-xl">Alerts</h1>
-          <p className="machine mt-2 text-xs text-muted">
-            {open.length === 0
-              ? 'nothing open'
-              : `${open.length} open · ${unacknowledged} not yet acknowledged`}
-          </p>
-          <p className="mt-2 max-w-2xl text-xs text-faint">
-            Everything that fires lands on this screen at the moment it fires. Quiet hours hold back
-            the text message, never the record — an alert opened at 02:00 is here, timed 02:00.
-          </p>
-        </div>
+    <Pad>
+      <div className="ow-inline" style={{ alignItems: 'flex-start', gap: '16px' }}>
+        <PageHeader
+          title="Alerts"
+          sub={
+            open.length === 0 ? (
+              'Nothing open.'
+            ) : (
+              <>
+                <b>{open.length}</b> open · <b>{unacknowledged}</b> not yet acknowledged
+              </>
+            )
+          }
+        />
         {canEditRules && (
-          <Link
-            href="/settings/notifications"
-            className="shrink-0 rounded border border-hairline px-2 py-1 text-xs text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
-          >
+          <Link href="/settings/notifications" className="ow-btn sm" style={{ marginLeft: 'auto' }}>
             Who gets told
           </Link>
         )}
-      </header>
+      </div>
 
-      <section className="space-y-3">
-        {open.length > 0 ? (
-          open.map((alert) => (
-            <AlertCard
-              key={alert.id}
-              alert={alert}
-              rule={alert.rule_id === null ? null : (rulesById.get(alert.rule_id) ?? null)}
-              contacts={contacts}
-              canAcknowledge={canAcknowledge}
-              canEditRules={canEditRules}
-              showFarm={showFarm}
-            />
-          ))
-        ) : (
-          <div className="rounded-lg border border-hairline bg-card p-6">
-            <h2 className="mb-1 text-base font-medium">Nothing needs attention</h2>
-            <p className="text-sm text-muted">
-              When something on the ranch goes wrong it shows up here, the moment it happens, day or
-              night.{' '}
-              {canEditRules ? (
-                <Link
-                  href="/settings/notifications"
-                  className="text-accent underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-                >
-                  Set who else gets told
-                </Link>
-              ) : (
-                'Ask your manager who else gets told.'
-              )}
-            </p>
-          </div>
-        )}
-      </section>
+      <p className="ow-quiet" style={{ marginBottom: '16px' }}>
+        Everything that fires lands on this screen at the moment it fires. Quiet hours hold back the
+        text message, never the record — an alert opened at 02:00 is here, timed 02:00.
+      </p>
 
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-base font-medium">What has closed</h2>
-          <p className="machine text-xs text-muted">last 30 days</p>
-        </div>
+      {open.length > 0 ? (
+        open.map((alert) => (
+          <AlertItem
+            key={alert.id}
+            alert={alert}
+            rule={alert.rule_id === null ? null : (rulesById.get(alert.rule_id) ?? null)}
+            contacts={contacts}
+            canAcknowledge={canAcknowledge}
+            canEditRules={canEditRules}
+            showFarm={showFarm}
+          />
+        ))
+      ) : (
+        <Card title="Nothing needs attention">
+          <p className="ow-body">
+            When something on the ranch goes wrong it shows up here, the moment it happens, day or
+            night.{' '}
+            {canEditRules ? (
+              <Link href="/settings/notifications" className="ow-live">
+                Set who else gets told
+              </Link>
+            ) : (
+              'Ask your manager who else gets told.'
+            )}
+          </p>
+        </Card>
+      )}
 
-        {history.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-hairline text-xs text-muted">
-                  <th className="py-2 pr-4 font-normal">What</th>
-                  {showFarm && <th className="py-2 pr-4 font-normal">Farm</th>}
-                  <th className="py-2 pr-4 font-normal">Opened</th>
-                  <th className="py-2 pr-4 font-normal">Acknowledged</th>
-                  <th className="py-2 font-normal">Cleared</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((alert) => {
-                  const copy = describeAlert(
-                    alert.kind,
-                    alert.details as Record<string, unknown> | null,
-                  );
-                  return (
-                    <tr key={alert.id} className="border-b border-hairline/50">
-                      <td className="py-2 pr-4 text-foreground">{copy.title}</td>
-                      {showFarm && (
-                        <td className="py-2 pr-4 text-xs text-muted">{alert.farmName}</td>
-                      )}
-                      <td className="machine py-2 pr-4 text-xs text-muted">
-                        {whenLabel(alert.opened_at, alert.timezone)}
-                      </td>
-                      <td className="machine py-2 pr-4 text-xs text-muted">
-                        {alert.acknowledged_at === null
-                          ? 'no'
-                          : whenLabel(alert.acknowledged_at, alert.timezone)}
-                      </td>
-                      <td className="machine py-2 text-xs text-muted">
-                        {whenLabel(alert.resolved_at, alert.timezone)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            <p className="mt-3 text-xs text-faint">
-              An alert clears on its own when the condition it watches goes away. Acknowledging
-              stops the chain from moving on to the next person; it does not close the alert,
-              because saying you know about low water is not the same as water in the trough.
-            </p>
-          </div>
-        ) : (
-          <p className="text-sm text-muted">No alerts have closed in the last 30 days.</p>
-        )}
-      </section>
-    </div>
+      <Card
+        title="What has closed"
+        sub={<span className="ow-machine">last 30 days</span>}
+        padded={false}
+        note={
+          history.length > 0
+            ? 'An alert clears on its own when the condition it watches goes away. Acknowledging stops the chain from moving on to the next person; it does not close the alert, because saying you know about low water is not the same as water in the trough.'
+            : undefined
+        }
+      >
+        <DataTable
+          caption="Alerts closed in the last 30 days"
+          columns={historyColumns}
+          rows={historyRows}
+          rowKey={(row) => row.id}
+          maxHeight={420}
+          empty="No alerts have closed in the last 30 days."
+        />
+      </Card>
+    </Pad>
   );
 }

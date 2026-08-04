@@ -29,15 +29,15 @@ export default async function FarmMapPage({ params }: { params: Promise<{ farmId
   } = await supabase.auth.getSession();
   const canEdit = isManagerOrOwner(claimsFromSession(session).memberRole);
 
+  // FarmMap owns its own full-height shell (.ow-mapshell) — the Site Map view
+  // is the mockup's one screen that manages its own scroll regions.
   return (
-    <div className="-m-8 flex h-screen flex-col">
-      <FarmMap
-        farmId={farm.id}
-        farmName={farm.name}
-        initialRows={rows}
-        bounds={bounds}
-        canEdit={canEdit}
-      />
-    </div>
+    <FarmMap
+      farmId={farm.id}
+      farmName={farm.name}
+      initialRows={rows}
+      bounds={bounds}
+      canEdit={canEdit}
+    />
   );
 }

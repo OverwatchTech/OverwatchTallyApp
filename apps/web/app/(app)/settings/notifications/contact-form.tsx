@@ -11,7 +11,7 @@
 // would be a control that lies about what it controls. Fill in the field, get
 // the channel. Clear the field, lose it.
 
-import { useActionState, useId, useState } from 'react';
+import { useActionState, useState } from 'react';
 
 import { saveContact } from './actions';
 import { IDLE } from './form-state';
@@ -43,11 +43,6 @@ const EMPTY: ContactDraft = {
   enabled: true,
 };
 
-const INPUT =
-  'machine w-full rounded border border-hairline bg-background px-2 py-1.5 text-xs text-foreground placeholder:text-faint focus:border-accent focus:outline-none';
-
-const LABEL = 'block text-xs text-muted';
-
 export function ContactForm({
   draft = EMPTY,
   farms,
@@ -63,7 +58,9 @@ export function ContactForm({
   submitLabel?: string;
 }) {
   const [state, formAction, pending] = useActionState(saveContact, IDLE);
-  const uid = useId();
+  // The contact's own row ids, not useId(): stable across server and client,
+  // and unique because only one add form ("new") is ever open at a time.
+  const uid = `contact-${draft.smsId || draft.emailId || 'new'}`;
 
   return (
     <form
@@ -71,17 +68,15 @@ export function ContactForm({
         formAction(formData);
         onDone?.();
       }}
-      className="space-y-3"
+      className="ow-form bare ow-stack"
     >
       <input type="hidden" name="smsId" value={draft.smsId} />
       <input type="hidden" name="emailId" value={draft.emailId} />
       <input type="hidden" name="enabled" value={draft.enabled ? 'on' : 'off'} />
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <label className={LABEL} htmlFor={`${uid}-label`}>
-            Name
-          </label>
+      <div className="ow-fgrid">
+        <label className="ow-field" htmlFor={`${uid}-label`}>
+          <span className="lbl">Name</span>
           <input
             id={`${uid}-label`}
             name="label"
@@ -89,19 +84,17 @@ export function ContactForm({
             required
             maxLength={80}
             placeholder="Dale, night man"
-            className={`${INPUT} mt-1`}
+            className="ow-input"
           />
-        </div>
+        </label>
 
-        <div>
-          <label className={LABEL} htmlFor={`${uid}-tier`}>
-            Called
-          </label>
+        <label className="ow-field" htmlFor={`${uid}-tier`}>
+          <span className="lbl">Called</span>
           <select
             id={`${uid}-tier`}
             name="tier"
             defaultValue={String(draft.tier)}
-            className={`${INPUT} mt-1`}
+            className="ow-input"
           >
             {Array.from({ length: Math.max(2, Math.min(10, tiers)) }, (_, i) => (
               <option key={i} value={String(i)}>
@@ -109,12 +102,10 @@ export function ContactForm({
               </option>
             ))}
           </select>
-        </div>
+        </label>
 
-        <div>
-          <label className={LABEL} htmlFor={`${uid}-phone`}>
-            Phone, for texts
-          </label>
+        <label className="ow-field" htmlFor={`${uid}-phone`}>
+          <span className="lbl">Phone, for texts</span>
           <input
             id={`${uid}-phone`}
             name="phone"
@@ -123,14 +114,12 @@ export function ContactForm({
             autoComplete="off"
             defaultValue={draft.phone}
             placeholder="+1 555 555 0123"
-            className={`${INPUT} mt-1`}
+            className="ow-input mono"
           />
-        </div>
+        </label>
 
-        <div>
-          <label className={LABEL} htmlFor={`${uid}-email`}>
-            Email
-          </label>
+        <label className="ow-field" htmlFor={`${uid}-email`}>
+          <span className="lbl">Email</span>
           <input
             id={`${uid}-email`}
             name="email"
@@ -138,19 +127,17 @@ export function ContactForm({
             autoComplete="off"
             defaultValue={draft.email}
             placeholder="dale@example.com"
-            className={`${INPUT} mt-1`}
+            className="ow-input mono"
           />
-        </div>
+        </label>
 
-        <div className="sm:col-span-2">
-          <label className={LABEL} htmlFor={`${uid}-farm`}>
-            Cares about
-          </label>
+        <label className="ow-field" htmlFor={`${uid}-farm`} style={{ gridColumn: '1 / -1' }}>
+          <span className="lbl">Cares about</span>
           <select
             id={`${uid}-farm`}
             name="farmId"
             defaultValue={draft.farmId}
-            className={`${INPUT} mt-1`}
+            className="ow-input"
           >
             <option value="">every place on this account</option>
             {farms.map((farm) => (
@@ -159,25 +146,21 @@ export function ContactForm({
               </option>
             ))}
           </select>
-        </div>
+        </label>
       </div>
 
-      <p className="text-xs text-faint">
+      <p className="ow-quiet">
         Leave a field empty and that way of reaching them goes away. Everyone who can sign in sees
         every alert on this screen already — a phone number and a mailbox are how someone hears
         about it when they are not looking at a screen.
       </p>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="submit"
-          disabled={pending}
-          className="rounded border border-hairline px-3 py-1.5 text-xs text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60"
-        >
+      <div className="ow-inline">
+        <button type="submit" disabled={pending} className="ow-btn">
           {pending ? 'Saving…' : submitLabel}
         </button>
-        {state.status === 'error' && <span className="text-xs text-alert">{state.message}</span>}
-        {state.status === 'saved' && <span className="text-xs text-accent">{state.message}</span>}
+        {state.status === 'error' && <span className="ow-msg err">{state.message}</span>}
+        {state.status === 'saved' && <span className="ow-msg ok">{state.message}</span>}
       </div>
     </form>
   );
@@ -189,25 +172,17 @@ export function AddContact({ farms, tiers }: { farms: readonly FarmOption[]; tie
 
   if (!open) {
     return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="rounded border border-hairline px-3 py-1.5 text-xs text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
-      >
+      <button type="button" onClick={() => setOpen(true)} className="ow-btn sm">
         Add a contact
       </button>
     );
   }
 
   return (
-    <div className="rounded border border-hairline/60 p-4">
-      <div className="mb-3 flex items-baseline justify-between gap-3">
-        <h3 className="text-sm font-medium">New contact</h3>
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="text-xs text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
-        >
+    <div className="ow-group" style={{ flex: '1 1 100%' }}>
+      <div className="ow-inline" style={{ justifyContent: 'space-between' }}>
+        <span className="gt">New contact</span>
+        <button type="button" onClick={() => setOpen(false)} className="ow-btn sm">
           Cancel
         </button>
       </div>

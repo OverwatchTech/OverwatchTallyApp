@@ -8,10 +8,11 @@
 // just "it was looked at".
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { DataTable, Pad, PageHeader, type DataTableColumn } from '@overwatch/ui';
 import { requireStaff } from '@/lib/admin/guard';
 import { auditedRead, recordStaffAction } from '@/lib/admin/audit';
 import { activeImpersonation } from '@/lib/admin/impersonation';
-import { Chip, Empty, Panel, buttonClass } from '@/lib/admin/ui';
+import { Chip, Empty, Panel, buttonClass } from '../../console-ui';
 import { shortDate, shortDateTime } from '@/lib/admin/time';
 import {
   AddFarmForm,
@@ -29,6 +30,18 @@ interface FarmRow {
   status: string;
   timezone: string;
   mdp_application_id: string | null;
+}
+
+interface MemberRow {
+  user_id: string;
+  role: string;
+  created_at: string;
+}
+
+interface OrderRow {
+  id: string;
+  status: string;
+  quoted_at: string;
 }
 
 export default async function OrgDetailPage({ params }: { params: Promise<{ orgId: string }> }) {
@@ -54,21 +67,22 @@ export default async function OrgDetailPage({ params }: { params: Promise<{ orgI
   const open = grant?.orgId === orgId;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="type-display text-xl">{org.name}</h1>
-          <p className="machine mt-2 text-xs text-muted">
-            {org.status}
-            {org.billing_email ? ` · ${org.billing_email}` : ''} · since {shortDate(org.created_at)}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Link href="/admin/orgs" className={buttonClass()}>
-            All accounts
-          </Link>
-        </div>
-      </header>
+    <Pad>
+      <div className="ow-inline" style={{ alignItems: 'flex-start', gap: '16px' }}>
+        <PageHeader
+          title={org.name}
+          sub={
+            <span className="ow-machine">
+              {org.status}
+              {org.billing_email ? ` · ${org.billing_email}` : ''} · since{' '}
+              <b>{shortDate(org.created_at)}</b>
+            </span>
+          }
+        />
+        <Link href="/admin/orgs" className={`${buttonClass()}`} style={{ marginLeft: 'auto' }}>
+          All accounts
+        </Link>
+      </div>
 
       {!open ? (
         <Panel
@@ -80,7 +94,7 @@ export default async function OrgDetailPage({ params }: { params: Promise<{ orgI
       ) : (
         <OrgDetail orgId={orgId} orgStatus={org.status} />
       )}
-    </div>
+    </Pad>
   );
 }
 
@@ -95,7 +109,7 @@ async function OrgDetail({ orgId, orgStatus }: { orgId: string; orgStatus: strin
         .order('name'),
   );
 
-  const members = await auditedRead<{ user_id: string; role: string; created_at: string }[]>(
+  const members = await auditedRead<MemberRow[]>(
     { action: 'org_members.read', table: 'org_members', orgId },
     async (supabase) =>
       supabase
@@ -105,7 +119,7 @@ async function OrgDetail({ orgId, orgStatus }: { orgId: string; orgStatus: strin
         .order('created_at'),
   );
 
-  const orders = await auditedRead<{ id: string; status: string; quoted_at: string }[]>(
+  const orders = await auditedRead<OrderRow[]>(
     { action: 'hardware_orders.read', table: 'hardware_orders', orgId },
     async (supabase) =>
       supabase
@@ -115,6 +129,30 @@ async function OrgDetail({ orgId, orgStatus }: { orgId: string; orgStatus: strin
         .order('quoted_at', { ascending: false }),
   );
 
+  const memberColumns: Array<DataTableColumn<MemberRow>> = [
+    { key: 'user', header: 'Login', mono: true, cell: (row) => row.user_id },
+    { key: 'role', header: 'Role', mono: true, cell: (row) => row.role },
+    {
+      key: 'since',
+      header: 'Since',
+      mono: true,
+      align: 'right',
+      cell: (row) => shortDate(row.created_at),
+    },
+  ];
+
+  const orderColumns: Array<DataTableColumn<OrderRow>> = [
+    { key: 'id', header: 'Order', mono: true, cell: (row) => row.id.slice(0, 8) },
+    { key: 'status', header: 'Status', mono: true, cell: (row) => row.status },
+    {
+      key: 'quoted',
+      header: 'Quoted',
+      mono: true,
+      align: 'right',
+      cell: (row) => shortDateTime(row.quoted_at),
+    },
+  ];
+
   return (
     <>
       <Panel title="Farms" note="One MDP Application per farm. Provisioning lives on each farm.">
@@ -123,15 +161,17 @@ async function OrgDetail({ orgId, orgStatus }: { orgId: string; orgStatus: strin
         ) : farms.data.length === 0 ? (
           <Empty>No farms yet.</Empty>
         ) : (
-          <ul className="divide-y divide-hairline">
+          <ul>
             {farms.data.map((farm) => (
-              <li key={farm.id} className="space-y-2 px-4 py-3">
-                <div className="flex flex-wrap items-baseline justify-between gap-3">
-                  <div>
-                    <p className="text-sm text-foreground">{farm.name}</p>
-                    <p className="machine text-xs text-muted">{farm.timezone}</p>
+              <li key={farm.id} className="ow-listitem">
+                <div className="ow-inline" style={{ alignItems: 'flex-start' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <p className="ow-body">
+                      <b>{farm.name}</b>
+                    </p>
+                    <p className="ow-quiet ow-machine">{farm.timezone}</p>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="ow-inline" style={{ marginLeft: 'auto', flex: 'none' }}>
                     {farm.mdp_application_id ? (
                       <Chip tone="live">application set</Chip>
                     ) : (
@@ -142,7 +182,9 @@ async function OrgDetail({ orgId, orgStatus }: { orgId: string; orgStatus: strin
                     </Link>
                   </div>
                 </div>
-                <FarmStatusForm orgId={orgId} farmId={farm.id} status={farm.status} />
+                <div style={{ marginTop: '9px' }}>
+                  <FarmStatusForm orgId={orgId} farmId={farm.id} status={farm.status} />
+                </div>
               </li>
             ))}
           </ul>
@@ -159,24 +201,16 @@ async function OrgDetail({ orgId, orgStatus }: { orgId: string; orgStatus: strin
       >
         {!members.ok ? (
           <Empty>{members.error}</Empty>
-        ) : members.data.length === 0 ? (
-          <Empty>No login attached. The customer cannot sign in to their own account yet.</Empty>
         ) : (
-          <ul className="divide-y divide-hairline">
-            {members.data.map((member) => (
-              <li
-                key={member.user_id}
-                className="flex flex-wrap items-baseline justify-between gap-3 px-4 py-2"
-              >
-                <span className="machine text-xs text-foreground">{member.user_id}</span>
-                <span className="machine text-xs text-muted">
-                  {member.role} · {shortDate(member.created_at)}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <DataTable
+            caption="Logins attached to this account"
+            columns={memberColumns}
+            rows={members.data}
+            rowKey={(row) => row.user_id}
+            empty="No login attached. The customer cannot sign in to their own account yet."
+          />
         )}
-        <div className="border-t border-hairline">
+        <div style={{ borderTop: '1px solid var(--line)' }}>
           <AttachMemberForm orgId={orgId} />
         </div>
       </Panel>
@@ -192,22 +226,14 @@ async function OrgDetail({ orgId, orgStatus }: { orgId: string; orgStatus: strin
       >
         {!orders.ok ? (
           <Empty>{orders.error}</Empty>
-        ) : orders.data.length === 0 ? (
-          <Empty>No orders for this account.</Empty>
         ) : (
-          <ul className="divide-y divide-hairline">
-            {orders.data.map((order) => (
-              <li
-                key={order.id}
-                className="flex flex-wrap items-baseline justify-between gap-3 px-4 py-2"
-              >
-                <span className="machine text-xs text-foreground">{order.id.slice(0, 8)}</span>
-                <span className="machine text-xs text-muted">
-                  {order.status} · quoted {shortDateTime(order.quoted_at)}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <DataTable
+            caption="Hardware orders for this account"
+            columns={orderColumns}
+            rows={orders.data}
+            rowKey={(row) => row.id}
+            empty="No orders for this account."
+          />
         )}
       </Panel>
 

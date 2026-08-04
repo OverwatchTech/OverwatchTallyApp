@@ -19,8 +19,22 @@
 // Colour (CLAUDE.md #4): hay is projections ONLY, and this screen is where
 // projections live — so projected values wear it and measured values do not.
 // Nothing here is orange: an assumption is not a fault.
+//
+// ===========================================================================
+// RE-SKIN (docs/reference/portal-mockup.html). Containers only.
+// ===========================================================================
+// Every string in this file is unchanged: the five source labels, the four
+// confidence labels, the number formatting, the `open` semantics, and the
+// dotted treatment that separates "set here" from "nobody here chose this".
+// What changed is that the Tailwind utilities became the mockup's scale —
+// 11.5px body in --ink2, 11px detail in --ink3, 9.5px mono pills, hairline
+// --line rules — in ../feed/ops.module.css. `Why` is now designed to be
+// handed to a Card's `note`, so the DASHED rule the mockup uses to mark a
+// footnote comes from `.ow-note` and is not re-drawn here.
 
 import type { Assumption, AssumptionSource, Confidence } from '@overwatch/forecast';
+
+import styles from '../feed/ops.module.css';
 
 const SOURCE_LABEL: Record<AssumptionSource, string> = {
   caller: 'set here',
@@ -30,23 +44,20 @@ const SOURCE_LABEL: Record<AssumptionSource, string> = {
   limitation: 'worth knowing',
 };
 
-const SOURCE_CLASS: Record<AssumptionSource, string> = {
-  caller: 'border-accent/50 text-accent',
+// CSS-module lookups are `string | undefined` under noUncheckedIndexedAccess.
+const SOURCE_CLASS: Record<AssumptionSource, string | undefined> = {
+  caller: styles.srcCaller,
   // Dotted, so "we picked this for you" is visibly not the same object as
   // a value the operation set.
-  default: 'border-dotted border-foreground/40 text-foreground',
-  derived: 'border-hairline text-muted',
-  literature: 'border-hairline text-muted',
-  limitation: 'border-hairline text-muted',
+  default: styles.srcDefault,
+  derived: styles.srcQuiet,
+  literature: styles.srcQuiet,
+  limitation: styles.srcQuiet,
 };
 
 export function SourceBadge({ source }: { source: AssumptionSource }) {
   return (
-    <span
-      className={`machine shrink-0 rounded border px-1.5 py-0.5 text-[10px] leading-none ${SOURCE_CLASS[source]}`}
-    >
-      {SOURCE_LABEL[source]}
-    </span>
+    <span className={`${styles.src} ${SOURCE_CLASS[source] ?? ''}`}>{SOURCE_LABEL[source]}</span>
   );
 }
 
@@ -62,11 +73,11 @@ export function ConfidenceChip({ confidence }: { confidence: Confidence }) {
   // Weight and wording carry it instead.
   const tone =
     confidence === 'high'
-      ? 'text-accent'
+      ? styles.confidenceHigh
       : confidence === 'none'
-        ? 'text-faint'
-        : 'text-muted';
-  return <span className={`machine text-xs ${tone}`}>{CONFIDENCE_LABEL[confidence]}</span>;
+        ? styles.confidenceNone
+        : styles.confidenceMid;
+  return <span className={`${styles.confidence} ${tone}`}>{CONFIDENCE_LABEL[confidence]}</span>;
 }
 
 function formatValue(value: Assumption['value']): string | null {
@@ -81,20 +92,18 @@ function formatValue(value: Assumption['value']): string | null {
 export function AssumptionList({ assumptions }: { assumptions: readonly Assumption[] }) {
   if (assumptions.length === 0) return null;
   return (
-    <ul className="space-y-2.5">
+    <ul className={styles.alist}>
       {assumptions.map((a) => {
         const value = formatValue(a.value);
         return (
-          <li key={a.key} className="flex flex-wrap items-start gap-x-2 gap-y-1">
+          <li key={a.key} className={styles.arow}>
             <SourceBadge source={a.source} />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs text-foreground">
+            <div className={styles.abody}>
+              <p className={styles.alabel}>
                 {a.label}
-                {value !== null && <span className="machine text-muted"> — {value}</span>}
+                {value !== null && <span className={styles.avalue}> — {value}</span>}
               </p>
-              {a.detail !== undefined && (
-                <p className="mt-0.5 text-xs text-faint">{a.detail}</p>
-              )}
+              {a.detail !== undefined && <p className={styles.adetail}>{a.detail}</p>}
             </div>
           </li>
         );
@@ -107,6 +116,9 @@ export function AssumptionList({ assumptions }: { assumptions: readonly Assumpti
  * The disclosure that sits under every number on this screen. Native
  * `<details>`: no client JavaScript, keyboard-operable, and open by default
  * where the assumptions are the story rather than a footnote.
+ *
+ * Pass it as a Card's `note` — `.ow-note` supplies the padding and the dashed
+ * rule that marks a footnote in the mockup.
  */
 export function Why({
   label = 'Why this number',
@@ -124,18 +136,18 @@ export function Why({
   open?: boolean;
 }) {
   return (
-    <details open={open} className="group mt-3 border-t border-hairline pt-3">
-      <summary className="cursor-pointer list-none text-xs text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent">
+    <details open={open} className={`group ${styles.why}`}>
+      <summary className={styles.whySummary}>
         <span className="group-open:hidden">{label} ▸</span>
         <span className="hidden group-open:inline">{label} ▾</span>
       </summary>
 
-      <div className="mt-3 space-y-3">
+      <div className={styles.whyBody}>
         {confidence !== undefined && (
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <div className={styles.whyConfidence}>
             <ConfidenceChip confidence={confidence} />
             {confidenceReasons !== undefined && confidenceReasons.length > 0 && (
-              <p className="text-xs text-faint">{confidenceReasons.join(' ')}</p>
+              <p className={styles.whyReasons}>{confidenceReasons.join(' ')}</p>
             )}
           </div>
         )}
@@ -154,7 +166,7 @@ export function Projected({
   children: React.ReactNode;
   className?: string;
 }) {
-  return <span className={`machine text-hay ${className}`}>{children}</span>;
+  return <span className={`${styles.projected} ${className}`}>{children}</span>;
 }
 
 /** A number this system measured. Never hay — it is not a projection. */
@@ -165,15 +177,15 @@ export function Measured({
   children: React.ReactNode;
   className?: string;
 }) {
-  return <span className={`machine text-foreground ${className}`}>{children}</span>;
+  return <span className={`${styles.measured} ${className}`}>{children}</span>;
 }
 
 /** One labelled input echoed back, so the reader can check the arithmetic. */
 export function InputRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 border-b border-hairline/50 py-1 last:border-0">
-      <dt className="text-xs text-faint">{label}</dt>
-      <dd className="machine text-xs text-foreground">{value}</dd>
+    <div className={styles.inputRow}>
+      <dt className={styles.inputK}>{label}</dt>
+      <dd className={styles.inputV}>{value}</dd>
     </div>
   );
 }
@@ -188,7 +200,7 @@ export function InputTable({
   );
   if (present.length === 0) return null;
   return (
-    <dl className="rounded border border-hairline/60 px-3 py-1">
+    <dl className={styles.inputs}>
       {present.map((r) => (
         <InputRow key={r.label} label={r.label} value={r.value} />
       ))}

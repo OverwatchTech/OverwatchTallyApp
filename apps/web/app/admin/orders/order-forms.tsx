@@ -9,7 +9,7 @@ import { useActionState, useState } from 'react';
 import { BOM, quoteTotal, type QuoteLine } from '@/lib/admin/bom';
 import { formatUsd, type OrderStatus } from '@/lib/admin/orders';
 import { IDLE } from '@/lib/admin/action-state';
-import { Field, FormNote, buttonClass, inputClass } from '@/lib/admin/ui';
+import { Field, FormNote, buttonClass, inputClass } from '../console-ui';
 import { MIN_REASON_LENGTH } from '@/lib/admin/impersonation';
 import { advanceOrder, createQuote, setInvoiceReference } from './actions';
 
@@ -44,7 +44,7 @@ export function QuoteBuilder({
     setLines((prev) => prev.map((line, i) => (i === index ? { ...line, ...patch } : line)));
 
   return (
-    <form action={formAction} className="space-y-4 p-4">
+    <form action={formAction} className="ow-form">
       <input type="hidden" name="orgId" value={farm?.orgId ?? ''} />
       <input type="hidden" name="farmId" value={farmId} />
       <input
@@ -73,15 +73,16 @@ export function QuoteBuilder({
         </select>
       </Field>
 
-      <div className="space-y-2">
-        <p className="text-xs text-muted">Line items</p>
+      <div className="ow-stack tight">
+        <p className="ow-micro">Line items</p>
         {lines.map((line, index) => (
-          <div key={index} className="flex flex-wrap items-end gap-2">
+          <div key={index} className="ow-frow">
             <select
               aria-label="Model"
               value={line.code}
               onChange={(event) => update(index, { code: event.target.value })}
-              className={`${inputClass} machine max-w-xs`}
+              className={`${inputClass} mono`}
+              style={{ maxWidth: '22rem' }}
             >
               {BOM.map((item) => (
                 <option key={item.code} value={item.code}>
@@ -95,7 +96,8 @@ export function QuoteBuilder({
               min={1}
               value={line.qty}
               onChange={(event) => update(index, { qty: Number(event.target.value) })}
-              className={`${inputClass} machine w-20`}
+              className={`${inputClass} mono`}
+              style={{ width: '5.5rem' }}
             />
             <input
               aria-label="Unit price"
@@ -105,7 +107,8 @@ export function QuoteBuilder({
               placeholder="unit $"
               value={line.unitPrice}
               onChange={(event) => update(index, { unitPrice: event.target.value })}
-              className={`${inputClass} machine w-28`}
+              className={`${inputClass} mono`}
+              style={{ width: '7.5rem' }}
             />
             {lines.length > 1 && (
               <button
@@ -127,7 +130,7 @@ export function QuoteBuilder({
         </button>
       </div>
 
-      <p className="machine text-xs text-muted">
+      <p className="ow-quiet ow-machine">
         Total {formatUsd(total)}
         {total === null && ' — price every line for a total'}
       </p>
@@ -143,7 +146,7 @@ export function QuoteBuilder({
         <input name="reason" required minLength={MIN_REASON_LENGTH} className={inputClass} />
       </Field>
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="ow-inline">
         <button type="submit" disabled={pending || !farm} className={buttonClass(true)}>
           {pending ? 'Creating…' : 'Create quote'}
         </button>
@@ -167,7 +170,7 @@ export function AdvanceForm({
   const [state, formAction, pending] = useActionState(advanceOrder, IDLE);
 
   return (
-    <form action={formAction} className="flex flex-wrap items-center gap-2">
+    <form action={formAction} className="ow-inline">
       <input type="hidden" name="orderId" value={orderId} />
       <input type="hidden" name="orgId" value={orgId} />
       <input type="hidden" name="from" value={from} />
@@ -192,7 +195,7 @@ export function InvoiceReferenceForm({
   const [state, formAction, pending] = useActionState(setInvoiceReference, IDLE);
 
   return (
-    <form action={formAction} className="flex flex-wrap items-center gap-2">
+    <form action={formAction} className="ow-inline">
       <input type="hidden" name="orderId" value={orderId} />
       <input type="hidden" name="orgId" value={orgId} />
       <label className="sr-only" htmlFor={`invoice-${orderId}`}>
@@ -203,7 +206,7 @@ export function InvoiceReferenceForm({
         name="invoiceId"
         defaultValue={invoiceId ?? ''}
         placeholder="in_…"
-        className="machine w-44 rounded border border-hairline bg-background px-2 py-1 text-xs text-foreground placeholder:text-faint focus:border-accent focus:outline-none"
+        className="ow-input mono w-md"
       />
       <button type="submit" disabled={pending} className={buttonClass()}>
         Save reference

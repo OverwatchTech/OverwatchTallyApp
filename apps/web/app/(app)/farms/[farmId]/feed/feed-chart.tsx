@@ -3,12 +3,28 @@
 // Dispensed vs scheduled, by pen and day. Bars are measured feed (teal
 // family — never hay); the scheduled target renders as a neutral dashed
 // line and only when a schedule with a target weight exists.
+//
+// RE-SKIN NOTE. The chart itself is unchanged — same series, same units,
+// same stacking. What changed is the chrome, to the mockup's two chart
+// classes and nothing more:
+//
+//   .axis  font-family: var(--mono); font-size: 10px; fill: var(--ink3)
+//   .gl    stroke: rgba(255,255,255,.06)
+//
+// The axis rule is applied as a CSS class (ops.module.css `.axis`), not as
+// SVG presentation attributes, for two reasons: a CSS rule beats a
+// presentation attribute so Recharts' own defaults cannot win, and `fill`
+// and `font-family` can then reference --ink3 and --mono instead of a
+// hard-coded copy of them that would drift from the token.
+//
+// The legend moved OUT of the chart and into the Card's `.hd`, where the
+// mockup puts it. Recharts' <Legend> is gone; the pen colours the card
+// header shows come from the same `penSeriesColor` this file draws with.
 
 import {
   Bar,
   ComposedChart,
   CartesianGrid,
-  Legend,
   Line,
   ResponsiveContainer,
   Tooltip,
@@ -16,7 +32,9 @@ import {
   YAxis,
 } from 'recharts';
 import { formatMeasure } from '@overwatch/ui';
-import { chart, MONO_STACK, penSeriesColor } from '@/lib/ops/palette';
+import { penSeriesColor } from '@/lib/ops/palette';
+
+import styles from './ops.module.css';
 
 export interface FeedChartRow {
   label: string;
@@ -24,7 +42,12 @@ export interface FeedChartRow {
   [penName: string]: string | number | null;
 }
 
-const tickStyle = { fill: chart.tick, fontFamily: MONO_STACK, fontSize: 10 };
+/** The mockup's `.gl`. */
+const GRIDLINE = 'rgba(255,255,255,.06)';
+/** A plan is not a projection and not a measurement — neutral, never hay. */
+const SCHEDULE_LINE = 'rgba(255,255,255,.55)';
+
+const tick = { className: styles.axis };
 
 export function FeedChart({
   data,
@@ -36,35 +59,34 @@ export function FeedChart({
   showScheduleLine: boolean;
 }) {
   return (
-    <div className="h-72 w-full">
+    <div className={styles.chart}>
       <ResponsiveContainer>
-        <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 4 }}>
-          <CartesianGrid stroke={chart.grid} vertical={false} />
-          <XAxis dataKey="label" tick={tickStyle} tickLine={false} axisLine={{ stroke: chart.grid }} />
+        <ComposedChart data={data} margin={{ top: 6, right: 6, bottom: 0, left: 0 }}>
+          <CartesianGrid stroke={GRIDLINE} vertical={false} />
+          <XAxis dataKey="label" tick={tick} tickLine={false} axisLine={{ stroke: GRIDLINE }} />
           <YAxis
-            tick={tickStyle}
+            tick={tick}
             tickLine={false}
             axisLine={false}
-            width={72}
+            width={66}
             tickFormatter={(v: number) => formatMeasure(v, 'kg', { digits: 0 })}
           />
           <Tooltip
-            cursor={{ fill: 'rgba(247, 248, 245, 0.04)' }}
+            cursor={{ fill: 'rgba(255,255,255,.04)' }}
             contentStyle={{
-              background: chart.tooltipBg,
-              border: `1px solid ${chart.tooltipBorder}`,
-              borderRadius: 8,
-              fontFamily: MONO_STACK,
+              background: '#171c23',
+              border: '1px solid rgba(255,255,255,.13)',
+              borderRadius: 11,
+              boxShadow: '0 12px 36px rgba(0,0,0,.5)',
+              fontFamily: 'var(--mono)',
               fontSize: 11,
+              padding: '9px 12px',
             }}
-            labelStyle={{ color: chart.tick, fontFamily: MONO_STACK, fontSize: 10 }}
+            itemStyle={{ padding: '1px 0' }}
+            labelStyle={{ color: '#5d6873', fontFamily: 'var(--mono)', fontSize: 10.5 }}
             formatter={(value) =>
               typeof value === 'number' ? formatMeasure(value, 'kg', { digits: 0 }) : String(value)
             }
-          />
-          <Legend
-            wrapperStyle={{ fontFamily: MONO_STACK, fontSize: 11, color: chart.tick }}
-            iconSize={9}
           />
           {penNames.map((pen, i) => (
             <Bar key={pen} dataKey={pen} stackId="fed" fill={penSeriesColor(i)} maxBarSize={26} />
@@ -74,7 +96,7 @@ export function FeedChart({
               type="stepAfter"
               dataKey="scheduled"
               name="Scheduled"
-              stroke={chart.reference}
+              stroke={SCHEDULE_LINE}
               strokeDasharray="6 4"
               strokeWidth={1.5}
               dot={false}

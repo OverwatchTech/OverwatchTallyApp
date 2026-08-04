@@ -1,5 +1,5 @@
-// The two disclosures under every open alert: what tripped it, and who was
-// told.
+// The three disclosures under every open alert: what tripped it, who was
+// told, and which rule was responsible.
 //
 // A RANCHER MUST BE ABLE TO DISAGREE WITH AN ALERT ON THE EVIDENCE. That is
 // the whole design goal. Every alert carries its inputs in `details`, stamped
@@ -15,6 +15,11 @@
 // anything without copy is left out rather than printed raw. A screen that
 // prints `{"level_mm":712.4}` at somebody in a feed alley has given up.
 //
+// The numbers go in the mockup's `.kv` grid — uppercase micro-key, mono
+// value — because they are measurements. The rule goes in the DASHED
+// `.note`, because a threshold is a setting, not a measurement, and the
+// dashed rule is what says so.
+//
 // The delivery half is governed by one rule: never imply a message went out.
 // See lib/alerts/delivery.ts.
 
@@ -28,66 +33,63 @@ import type { RuleRow } from '@/lib/alerts/rules-db';
 import { kindLabel, quietHoursLabel, parseQuietHours, ruleSettings } from '@/lib/alerts/rules';
 import type { AlertFact } from '@/lib/alerts/kinds';
 
-export function TrippedBy({
-  facts,
-  rule,
-  canEdit,
-}: {
-  facts: readonly AlertFact[];
-  rule: RuleRow | null;
-  canEdit: boolean;
-}) {
-  const settings = rule === null ? [] : ruleSettings(rule.kind, rule.params);
-  const quiet = rule === null ? null : parseQuietHours(rule.quiet_hours);
-
-  return (
-    <div className="mt-4 border-t border-hairline pt-3">
-      <p className="text-xs text-muted">What tripped it</p>
-
-      {facts.length > 0 ? (
-        <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-3 lg:grid-cols-4">
-          {facts.map((f) => (
-            <div key={f.label}>
-              <dt className="text-xs text-faint">{f.label}</dt>
-              <dd className="machine mt-0.5 text-sm text-foreground">{f.value}</dd>
-            </div>
-          ))}
-        </dl>
-      ) : (
-        <p className="mt-2 text-xs text-faint">
+/** The numbers that opened the alert, in the mockup's `.kv` grid. */
+export function TrippedBy({ facts }: { facts: readonly AlertFact[] }) {
+  if (facts.length === 0) {
+    return (
+      <div className="ow-listitem">
+        <p className="ow-quiet">
           This alert did not record the numbers behind it. Call us — that is a fault on our side,
           not yours.
         </p>
-      )}
+      </div>
+    );
+  }
 
-      <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <p className="text-xs text-faint">
-          {rule === null ? (
-            'Opened outside your rules, so there is no setting to argue with.'
-          ) : (
-            <>
-              <span className="text-muted">Rule: </span>
-              <span className="text-foreground">{kindLabel(rule.kind)}</span>
-              {settings.length > 0 && (
-                <span className="machine">
-                  {' · '}
-                  {settings.map((s) => `${s.label.toLowerCase()} ${s.value}`).join(' · ')}
-                </span>
-              )}
-              <span className="machine">{` · ${quietHoursLabel(quiet)}`}</span>
-            </>
-          )}
-        </p>
-        {rule !== null && canEdit && (
-          <Link
-            href="/settings/notifications"
-            className="text-xs text-accent underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-          >
+  return (
+    <div className="ow-kv auto">
+      {facts.map((f) => (
+        <div key={f.label}>
+          <div className="k">{f.label}</div>
+          <div className="v">{f.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The rule and its settings, for the dashed `note` footer of the card.
+ * A threshold is a setting somebody chose, not a reading — the dashed rule
+ * above it is the tell.
+ */
+export function RuleProvenance({ rule, canEdit }: { rule: RuleRow | null; canEdit: boolean }) {
+  if (rule === null) {
+    return <>Opened outside your rules, so there is no setting to argue with.</>;
+  }
+
+  const settings = ruleSettings(rule.kind, rule.params);
+  const quiet = parseQuietHours(rule.quiet_hours);
+
+  return (
+    <>
+      Rule: <b>{kindLabel(rule.kind)}</b>
+      {settings.length > 0 && (
+        <span className="ow-machine">
+          {' · '}
+          {settings.map((s) => `${s.label.toLowerCase()} ${s.value}`).join(' · ')}
+        </span>
+      )}
+      <span className="ow-machine">{` · ${quietHoursLabel(quiet)}`}</span>
+      {canEdit && (
+        <>
+          {' '}
+          <Link href="/settings/notifications" className="ow-btn sm">
             Change what this watches
           </Link>
-        )}
-      </div>
-    </div>
+        </>
+      )}
+    </>
   );
 }
 
@@ -108,49 +110,39 @@ export function DeliveryLog({
   const tail = summary === null ? '' : ` — ${summary}`;
 
   return (
-    <details className="group mt-3 border-t border-hairline pt-3">
-      <summary className="cursor-pointer list-none text-xs text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent">
-        <span className="group-open:hidden">
-          Who was told<span className="machine">{tail}</span> ▸
-        </span>
-        <span className="hidden group-open:inline">Who was told ▾</span>
-      </summary>
+    <div className="ow-listitem">
+      <details className="ow-disc">
+        <summary>
+          Who was told<span className="ow-machine">{tail}</span>
+        </summary>
 
-      <div className="mt-3 space-y-3">
-        {lines.length > 0 && (
-          <ul className="space-y-2">
-            {lines.map((line, i) => (
-              <li
-                key={`${line.channel}-${line.who ?? ''}-${line.at ?? ''}-${i}`}
-                className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"
-              >
-                <span className="text-xs text-faint">{channelLabel(line.channel)}</span>
-                <span
-                  className={`machine text-xs ${line.wrong ? 'text-alert' : 'text-foreground'}`}
-                >
-                  {line.status}
-                </span>
-                {line.who !== null && (
-                  <span className="machine text-xs text-muted">{line.who}</span>
-                )}
-                {line.at !== null && (
-                  <span className="machine text-xs text-faint">{whenLabel(line.at, timezone)}</span>
-                )}
-                {line.detail !== null && (
-                  <span className="machine text-xs text-faint">({line.detail})</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
+        <div className="ow-stack tight" style={{ marginTop: '11px' }}>
+          {lines.map((line, i) => (
+            <p
+              key={`${line.channel}-${line.who ?? ''}-${line.at ?? ''}-${i}`}
+              className="ow-inline"
+              style={{ gap: '8px' }}
+            >
+              <span className="ow-micro">{channelLabel(line.channel)}</span>
+              <span className={`ow-machine ${line.wrong ? 'ow-wrong' : ''}`}>{line.status}</span>
+              {line.who !== null && <span className="ow-machine ow-quiet">{line.who}</span>}
+              {line.at !== null && (
+                <span className="ow-machine ow-quiet">{whenLabel(line.at, timezone)}</span>
+              )}
+              {line.detail !== null && (
+                <span className="ow-machine ow-quiet">({line.detail})</span>
+              )}
+            </p>
+          ))}
 
-        {gaps.map((gap) => (
-          <p key={gap.channel} className="text-xs text-faint">
-            <span className="text-muted">{channelLabel(gap.channel)}: </span>
-            {gap.reason}
-          </p>
-        ))}
-      </div>
-    </details>
+          {gaps.map((gap) => (
+            <p key={gap.channel} className="ow-quiet">
+              <b>{channelLabel(gap.channel)}: </b>
+              {gap.reason}
+            </p>
+          ))}
+        </div>
+      </details>
+    </div>
   );
 }

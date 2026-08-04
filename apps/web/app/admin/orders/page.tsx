@@ -3,9 +3,13 @@
 // Line items reference the BOM in ARCHITECTURE §7. Status is forward-only and
 // a database trigger is what enforces it — the UI only ever offers the next
 // step.
+//
+// One table per step, because "what is sitting at invoiced" is a question a
+// table answers and a stack of cards does not.
+import { DataTable, Pad, PageHeader, type DataTableColumn } from '@overwatch/ui';
 import { requireStaff } from '@/lib/admin/guard';
 import { recordStaffAction } from '@/lib/admin/audit';
-import { bomItem, parseQuoteLines, quoteTotal } from '@/lib/admin/bom';
+import { bomItem, parseQuoteLines, quoteTotal, type QuoteLine } from '@/lib/admin/bom';
 import {
   ORDER_FLOW,
   ORDER_LABELS,
@@ -14,11 +18,23 @@ import {
   nextStatus,
   type OrderStatus,
 } from '@/lib/admin/orders';
-import { Chip, Empty, Panel } from '@/lib/admin/ui';
+import { Chip, Panel } from '../console-ui';
 import { shortDateTime } from '@/lib/admin/time';
 import { AdvanceForm, InvoiceReferenceForm, QuoteBuilder } from './order-forms';
 
 export const dynamic = 'force-dynamic';
+
+interface OrderRow {
+  id: string;
+  orgId: string;
+  orgName: string;
+  farmName: string | null;
+  notes: string | null;
+  invoiceId: string | null;
+  quotedAt: string;
+  lines: QuoteLine[];
+  total: number | null;
+}
 
 export default async function OrdersPage() {
   const { supabase } = await requireStaff();
@@ -45,22 +61,88 @@ export default async function OrdersPage() {
     orgName: orgNames.get(farm.org_id) ?? 'unknown account',
   }));
 
-  const byStatus = new Map<OrderStatus, NonNullable<typeof orders>>();
+  const byStatus = new Map<OrderStatus, OrderRow[]>();
   for (const order of orders ?? []) {
+    const lines = parseQuoteLines(order.line_items);
+    const row: OrderRow = {
+      id: order.id,
+      orgId: order.org_id,
+      orgName: orgNames.get(order.org_id) ?? 'unknown account',
+      farmName: order.farm_id ? (farmNames.get(order.farm_id) ?? 'unknown farm') : null,
+      notes: order.notes,
+      invoiceId: order.stripe_invoice_id,
+      quotedAt: order.quoted_at,
+      lines,
+      total: quoteTotal(lines),
+    };
     const list = byStatus.get(order.status) ?? [];
-    list.push(order);
+    list.push(row);
     byStatus.set(order.status, list);
   }
 
+  function columnsFor(status: OrderStatus): Array<DataTableColumn<OrderRow>> {
+    const next = nextStatus(status);
+    return [
+      {
+        key: 'who',
+        header: 'Account',
+        cell: (row) => (
+          <>
+            <b>{row.orgName}</b>
+            {row.farmName && <span className="ow-quiet"> · {row.farmName}</span>}
+            <br />
+            <span className="ow-quiet ow-machine">
+              {row.id.slice(0, 8)} · quoted {shortDateTime(row.quotedAt)}
+            </span>
+            {row.notes && <div className="ow-quiet">{row.notes}</div>}
+          </>
+        ),
+      },
+      {
+        key: 'lines',
+        header: 'Line items',
+        cell: (row) => (
+          <ul>
+            {row.lines.map((line, index) => (
+              <li key={`${line.code}-${index}`} className="ow-quiet ow-machine">
+                {line.qty}× {line.code}{' '}
+                <span className="ow-quiet">{bomItem(line.code)?.label ?? 'not in the BOM'}</span>
+              </li>
+            ))}
+          </ul>
+        ),
+      },
+      {
+        key: 'total',
+        header: 'Total',
+        align: 'right',
+        cell: (row) => <Chip tone={row.total === null ? 'plain' : 'live'}>{formatUsd(row.total)}</Chip>,
+      },
+      {
+        key: 'act',
+        header: 'Next step',
+        cell: (row) => (
+          <div className="ow-stack tight">
+            {next && <AdvanceForm orderId={row.id} orgId={row.orgId} from={status} to={next} />}
+            <InvoiceReferenceForm orderId={row.id} orgId={row.orgId} invoiceId={row.invoiceId} />
+          </div>
+        ),
+      },
+    ];
+  }
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <header>
-        <h1 className="type-display text-xl">Hardware</h1>
-        <p className="mt-2 max-w-prose text-sm text-muted">
-          Mac&rsquo;s Tech&rsquo;s job pipeline. Status moves forward only — the database refuses a
-          backward step, so a mistake is corrected by a new record, not by rewriting the old one.
-        </p>
-      </header>
+    <Pad>
+      <PageHeader
+        title="Hardware"
+        sub={
+          <>
+            Mac&rsquo;s Tech&rsquo;s job pipeline. Status moves forward only — the database refuses
+            a backward step, so a mistake is corrected by a new record, not by rewriting the old
+            one.
+          </>
+        }
+      />
 
       {farmOptions.length > 0 && (
         <Panel
@@ -73,77 +155,22 @@ export default async function OrdersPage() {
 
       {ORDER_FLOW.map((status) => {
         const list = byStatus.get(status) ?? [];
-        const next = nextStatus(status);
         return (
           <Panel
             key={status}
             title={`${ORDER_LABELS[status]} (${list.length})`}
             note={ORDER_MEANING[status]}
           >
-            {list.length === 0 ? (
-              <Empty>Nothing at this step.</Empty>
-            ) : (
-              <ul className="divide-y divide-hairline">
-                {list.map((order) => {
-                  const lines = parseQuoteLines(order.line_items);
-                  const total = quoteTotal(lines);
-                  return (
-                    <li key={order.id} className="space-y-2 px-4 py-3">
-                      <div className="flex flex-wrap items-baseline justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm text-foreground">
-                            {orgNames.get(order.org_id) ?? 'unknown account'}
-                            {order.farm_id && (
-                              <span className="text-muted">
-                                {' '}
-                                · {farmNames.get(order.farm_id) ?? 'unknown farm'}
-                              </span>
-                            )}
-                          </p>
-                          <p className="machine text-xs text-muted">
-                            {order.id.slice(0, 8)} · quoted {shortDateTime(order.quoted_at)}
-                          </p>
-                        </div>
-                        <Chip tone={total === null ? 'plain' : 'live'}>{formatUsd(total)}</Chip>
-                      </div>
-
-                      <ul className="flex flex-wrap gap-x-4 gap-y-1">
-                        {lines.map((line, index) => (
-                          <li key={`${line.code}-${index}`} className="machine text-xs text-muted">
-                            {line.qty}× {line.code}
-                            <span className="text-faint">
-                              {' '}
-                              {bomItem(line.code)?.label ?? 'not in the BOM'}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-
-                      {order.notes && <p className="text-xs text-muted">{order.notes}</p>}
-
-                      <div className="flex flex-wrap items-center gap-3">
-                        {next && (
-                          <AdvanceForm
-                            orderId={order.id}
-                            orgId={order.org_id}
-                            from={status}
-                            to={next}
-                          />
-                        )}
-                        <InvoiceReferenceForm
-                          orderId={order.id}
-                          orgId={order.org_id}
-                          invoiceId={order.stripe_invoice_id}
-                        />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            <DataTable
+              caption={`Orders at ${ORDER_LABELS[status]}`}
+              columns={columnsFor(status)}
+              rows={list}
+              rowKey={(row) => row.id}
+              empty="Nothing at this step."
+            />
           </Panel>
         );
       })}
-    </div>
+    </Pad>
   );
 }

@@ -14,14 +14,11 @@
 // finds a dead heifer will be right to be angry, so the control says what it
 // does in the plainest words available.
 
-import { useActionState, useId, useState } from 'react';
+import { useActionState, useState } from 'react';
 
 import { saveRuleDelivery } from './actions';
 import { IDLE } from './form-state';
 import type { Severity } from '@/lib/alerts/kinds';
-
-const INPUT =
-  'machine rounded border border-hairline bg-background px-2 py-1.5 text-xs text-foreground focus:border-accent focus:outline-none';
 
 const SEVERITIES: readonly { value: Severity; label: string }[] = [
   { value: 'info', label: 'Heads-up' },
@@ -43,35 +40,36 @@ export interface RuleDeliveryDraft {
 export function RuleDeliveryForm({ draft }: { draft: RuleDeliveryDraft }) {
   const [state, formAction, pending] = useActionState(saveRuleDelivery, IDLE);
   const [quietOn, setQuietOn] = useState(draft.quietOn);
-  const uid = useId();
+  // The rule id, not useId(). Every form on this page is keyed by the rule it
+  // edits, so the id is stable, unique, and identical on the server and in the
+  // browser — useId() derives from tree position and drifts between the two
+  // whenever anything above this component renders differently, which shows
+  // up as a hydration mismatch on the `htmlFor`/`id` pair.
+  const uid = `rule-${draft.ruleId}`;
 
   return (
-    <form action={formAction} className="space-y-4">
+    <form action={formAction} className="ow-form bare ow-stack">
       <input type="hidden" name="ruleId" value={draft.ruleId} />
 
-      <label className="flex items-center gap-2 text-xs text-foreground">
-        <input
-          type="checkbox"
-          name="ruleEnabled"
-          defaultChecked={draft.ruleEnabled}
-          className="accent-[var(--accent)]"
-        />
+      <label className="ow-check">
+        <input type="checkbox" name="ruleEnabled" defaultChecked={draft.ruleEnabled} />
         Watch for this
       </label>
 
-      <div className="space-y-3 rounded border border-hairline/60 p-3">
-        <label className="flex items-center gap-2 text-xs text-foreground">
+      <div className="ow-group">
+        <span className="gt">Quiet hours</span>
+
+        <label className="ow-check">
           <input
             type="checkbox"
             name="quietOn"
             checked={quietOn}
             onChange={(e) => setQuietOn(e.target.checked)}
-            className="accent-[var(--accent)]"
           />
           Hold calls and emails during set hours
         </label>
 
-        <p className="text-xs text-faint">
+        <p className="ow-quiet">
           Quiet hours silence the phone, not the record. An alert that fires at 02:00 is still
           recorded at 02:00 and is on the alerts screen at 02:00 — the only thing held back is the
           text or the email, and it is held, not cancelled.
@@ -79,50 +77,47 @@ export function RuleDeliveryForm({ draft }: { draft: RuleDeliveryDraft }) {
 
         {quietOn && (
           <>
-            <div className="flex flex-wrap items-end gap-3">
-              <div>
-                <label className="block text-xs text-muted" htmlFor={`${uid}-from`}>
-                  Quiet from
-                </label>
+            <div className="ow-frow">
+              <label className="ow-field" htmlFor={`${uid}-from`}>
+                <span className="lbl">Quiet from</span>
                 <input
                   id={`${uid}-from`}
                   name="quietFrom"
                   type="time"
                   defaultValue={draft.quietFrom}
-                  className={`${INPUT} mt-1`}
+                  className="ow-input mono w-sm"
                 />
-              </div>
-              <div>
-                <label className="block text-xs text-muted" htmlFor={`${uid}-to`}>
-                  until
-                </label>
+              </label>
+              <label className="ow-field" htmlFor={`${uid}-to`}>
+                <span className="lbl">until</span>
                 <input
                   id={`${uid}-to`}
                   name="quietTo"
                   type="time"
                   defaultValue={draft.quietTo}
-                  className={`${INPUT} mt-1`}
+                  className="ow-input mono w-sm"
                 />
-              </div>
-              <p className="machine pb-1.5 text-xs text-faint">the farm&rsquo;s own clock</p>
+              </label>
+              <p className="ow-quiet ow-machine" style={{ paddingBottom: '7px' }}>
+                the farm&rsquo;s own clock
+              </p>
             </div>
 
-            <fieldset>
-              <legend className="text-xs text-muted">Hold which of these</legend>
-              <div className="mt-1 flex flex-wrap gap-4">
+            <fieldset className="ow-group">
+              <legend>Hold which of these</legend>
+              <div className="ow-inline" style={{ gap: '16px' }}>
                 {SEVERITIES.map((s) => (
-                  <label key={s.value} className="flex items-center gap-2 text-xs text-foreground">
+                  <label key={s.value} className="ow-check">
                     <input
                       type="checkbox"
                       name={`silence_${s.value}`}
                       defaultChecked={draft.silenced.includes(s.value)}
-                      className="accent-[var(--accent)]"
                     />
                     {s.label}
                   </label>
                 ))}
               </div>
-              <p className="mt-1 text-xs text-faint">
+              <p className="ow-quiet">
                 Leave Critical unticked and a critical alert still rings at 03:00. That is what
                 critical is for.
               </p>
@@ -131,13 +126,11 @@ export function RuleDeliveryForm({ draft }: { draft: RuleDeliveryDraft }) {
         )}
       </div>
 
-      <div className="space-y-2 rounded border border-hairline/60 p-3">
-        <p className="text-xs text-foreground">If nobody acknowledges</p>
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="block text-xs text-muted" htmlFor={`${uid}-second`}>
-              Call group 2 after
-            </label>
+      <div className="ow-group">
+        <span className="gt">If nobody acknowledges</span>
+        <div className="ow-frow">
+          <label className="ow-field" htmlFor={`${uid}-second`}>
+            <span className="lbl">Call group 2 after</span>
             <input
               id={`${uid}-second`}
               name="secondAfter"
@@ -146,13 +139,11 @@ export function RuleDeliveryForm({ draft }: { draft: RuleDeliveryDraft }) {
               max={1440}
               step={5}
               defaultValue={draft.secondAfter}
-              className={`${INPUT} mt-1 w-24`}
+              className="ow-input mono w-sm"
             />
-          </div>
-          <div>
-            <label className="block text-xs text-muted" htmlFor={`${uid}-third`}>
-              Call group 3 after
-            </label>
+          </label>
+          <label className="ow-field" htmlFor={`${uid}-third`}>
+            <span className="lbl">Call group 3 after</span>
             <input
               id={`${uid}-third`}
               name="thirdAfter"
@@ -161,27 +152,25 @@ export function RuleDeliveryForm({ draft }: { draft: RuleDeliveryDraft }) {
               max={1440}
               step={5}
               defaultValue={draft.thirdAfter}
-              className={`${INPUT} mt-1 w-24`}
+              className="ow-input mono w-sm"
             />
-          </div>
-          <p className="machine pb-1.5 text-xs text-faint">minutes · 0 turns a group off</p>
+          </label>
+          <p className="ow-quiet ow-machine" style={{ paddingBottom: '7px' }}>
+            minutes · 0 turns a group off
+          </p>
         </div>
-        <p className="text-xs text-faint">
+        <p className="ow-quiet">
           The chain stops the moment somebody acknowledges on the alerts screen. It does not stop
           when the alert clears on its own, because nobody was told.
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="submit"
-          disabled={pending}
-          className="rounded border border-hairline px-3 py-1.5 text-xs text-foreground transition-colors hover:border-accent hover:text-accent focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60"
-        >
+      <div className="ow-inline">
+        <button type="submit" disabled={pending} className="ow-btn">
           {pending ? 'Saving…' : 'Save these hours'}
         </button>
-        {state.status === 'error' && <span className="text-xs text-alert">{state.message}</span>}
-        {state.status === 'saved' && <span className="text-xs text-accent">{state.message}</span>}
+        {state.status === 'error' && <span className="ow-msg err">{state.message}</span>}
+        {state.status === 'saved' && <span className="ow-msg ok">{state.message}</span>}
       </div>
     </form>
   );

@@ -1,14 +1,16 @@
 // Operations overview — triage, not a dashboard.
 //
 // Everything here answers "is anything wrong right now, and where do I go".
-// Each tile links to the screen that can act on it.
+// Each tile links to the screen that can act on it. The KPI row is the
+// answer; the two panels below it are where the answer came from.
 import Link from 'next/link';
+import { Cols2, KpiGrid, Pad, PageHeader } from '@overwatch/ui';
 import { requireStaff } from '@/lib/admin/guard';
 import { recordStaffAction } from '@/lib/admin/audit';
 import { readDeadLetterQueue, readIngestRate } from '@/lib/admin/ingest';
 import { readBudget } from '@/lib/admin/mdp/budget';
 import { readFleet } from '@/lib/admin/fleet';
-import { Chip, Panel, Stat, buttonClass } from '@/lib/admin/ui';
+import { Chip, FactRow, Facts, Panel, Stat, buttonClass } from './console-ui';
 import { relativeTime } from '@/lib/admin/time';
 
 export const dynamic = 'force-dynamic';
@@ -36,27 +38,25 @@ export default async function AdminOverviewPage() {
   const dlqWrong = dlq.openCount > 0;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <header>
-        <h1 className="type-display text-xl">Operations</h1>
-        <p className="mt-2 max-w-prose text-sm text-muted">
-          Mac&rsquo;s Tech internal console. Customers never see these screens and never provision
-          hardware — installer workflows live here.
-        </p>
-      </header>
+    <Pad>
+      <PageHeader
+        title="Operations"
+        sub={
+          <>
+            Mac&rsquo;s Tech internal console. Customers never see these screens and never provision
+            hardware — installer workflows live here.
+          </>
+        }
+      />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <KpiGrid>
         <Stat
           label="Accounts"
           value={(orgs.data ?? []).length}
           note={suspendedOrgs > 0 ? `${suspendedOrgs} suspended` : 'all active'}
           tone={suspendedOrgs > 0 ? 'wrong' : 'plain'}
         />
-        <Stat
-          label="Farms"
-          value={(farms.data ?? []).length}
-          note={`${liveDevices} devices live`}
-        />
+        <Stat label="Farms" value={(farms.data ?? []).length} note={`${liveDevices} devices live`} />
         <Stat
           label="Events, last 24 h"
           value={rate.total.toLocaleString('en-US')}
@@ -73,9 +73,9 @@ export default async function AdminOverviewPage() {
           note={dlqWrong ? 'events failed to parse' : 'nothing waiting'}
           tone={dlqWrong ? 'wrong' : 'plain'}
         />
-      </div>
+      </KpiGrid>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <Cols2>
         <Panel
           title="Ingest"
           note="MDP keeps one day at most. An event we fail to persist is gone."
@@ -85,25 +85,28 @@ export default async function AdminOverviewPage() {
             </Link>
           }
         >
-          <dl className="divide-y divide-hairline text-sm">
-            <Row label="Normalized (24 h)" value={rate.totals.normalized.toLocaleString('en-US')} />
-            <Row label="Ignored (24 h)" value={rate.totals.ignored.toLocaleString('en-US')} />
-            <Row
+          <Facts>
+            <FactRow
+              label="Normalized (24 h)"
+              value={rate.totals.normalized.toLocaleString('en-US')}
+            />
+            <FactRow label="Ignored (24 h)" value={rate.totals.ignored.toLocaleString('en-US')} />
+            <FactRow
               label="Dead-lettered (24 h)"
               value={rate.totals.dead_letter.toLocaleString('en-US')}
               tone={rate.totals.dead_letter > 0 ? 'wrong' : 'plain'}
             />
-            <Row
+            <FactRow
               label="Still pending"
               value={rate.totals.pending.toLocaleString('en-US')}
               tone={rate.totals.pending > 0 ? 'wrong' : 'plain'}
             />
-            <Row
+            <FactRow
               label="MDP API used today"
               value={`${budget.spent} / ${budget.allowance}`}
               tone={budget.approachingCap ? 'wrong' : 'plain'}
             />
-          </dl>
+          </Facts>
         </Panel>
 
         <Panel
@@ -116,47 +119,28 @@ export default async function AdminOverviewPage() {
           }
         >
           {needsTruck.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-muted">
-              Nothing is trending toward a site visit.
-            </p>
+            <div className="ow-note">Nothing is trending toward a site visit.</div>
           ) : (
-            <ul className="divide-y divide-hairline">
+            <ul>
               {needsTruck.slice(0, 5).map((row) => (
-                <li key={row.deviceId} className="flex items-start gap-3 px-4 py-3">
-                  <Chip tone="wrong">{row.truckRollScore}</Chip>
-                  <div className="min-w-0">
-                    <p className="machine truncate text-xs text-foreground">
-                      {row.devEui} · {row.model}
-                    </p>
-                    <p className="truncate text-xs text-muted">
-                      {row.farmName} — {row.reasons[0] ?? 'flagged'}
-                    </p>
+                <li key={row.deviceId} className="ow-listitem tight">
+                  <div className="ow-inline" style={{ alignItems: 'flex-start' }}>
+                    <Chip tone="wrong">{row.truckRollScore}</Chip>
+                    <div style={{ minWidth: 0 }}>
+                      <p className="ow-body ow-machine" style={{ fontSize: '12px' }}>
+                        {row.devEui} · {row.model}
+                      </p>
+                      <p className="ow-quiet">
+                        {row.farmName} — {row.reasons[0] ?? 'flagged'}
+                      </p>
+                    </div>
                   </div>
                 </li>
               ))}
             </ul>
           )}
         </Panel>
-      </div>
-    </div>
-  );
-}
-
-function Row({
-  label,
-  value,
-  tone = 'plain',
-}: {
-  label: string;
-  value: string;
-  tone?: 'plain' | 'wrong';
-}) {
-  return (
-    <div className="flex items-baseline justify-between gap-3 px-4 py-2">
-      <dt className="text-xs text-muted">{label}</dt>
-      <dd className={`machine text-xs ${tone === 'wrong' ? 'text-alert' : 'text-foreground'}`}>
-        {value}
-      </dd>
-    </div>
+      </Cols2>
+    </Pad>
   );
 }

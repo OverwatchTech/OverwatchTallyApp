@@ -1,0 +1,618 @@
+/*
+  ============================================================================
+  Site Map chrome — ported from docs/reference/portal-mockup.html
+  ============================================================================
+
+  The mockup's `.mapwrap / .rail / .sec / .lay / .maparea / .tools / .tbtn /
+  .zoomctl / .hudL / .hudR` block, namespaced `ow-` exactly like the rest of
+  the system in apps/web/app/globals.css. It lives here rather than in
+  globals.css only because four agents are converting screens against that
+  file at the same time; it is written to be lifted into globals.css verbatim
+  (next to `.ow-drawer`, which this screen uses unchanged).
+
+  Values are copied from the mockup. The three deliberate deviations are
+  commented where they occur: the rail becomes a slide-over under 900px
+  instead of vanishing outright, the scale bar sits above the imagery
+  attribution rather than on top of it, and the draw-session panels reuse the
+  same blurred `--panel` treatment the mockup gives its floating chrome.
+  ============================================================================
+*/
+
+/*
+  Full-height, no page scroll.
+
+  Inside AppShell this fills `.ow-view` exactly — the mockup's
+  `calc(100vh - 54px)`, expressed as 100% of the shell's 1fr row so the bar
+  height stays defined in one place. `(app)/layout.tsx` pads every view child
+  that is not a `.ow-pad` by 22px for screens still awaiting conversion; the
+  Site Map is full bleed, so it opts out. The selector outranks that utility
+  deliberately (0,3,1 against 0,2,0) rather than leaning on source order,
+  which is not guaranteed between globals.css and this file.
+
+  The bare `.ow-mapshell` rule is the fallback for rendering outside the
+  shell (the pre-mockup layout, or a standalone route): 100vh, and the
+  negative margin cancels the old <main className="p-8"> gutter.
+*/
+.ow-mapshell {
+  height: 100vh;
+  margin: -2rem;
+}
+body:has(.ow-app) .ow-view > .ow-mapshell,
+body:has(.ow-app) .ow-mapshell {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.ow-mapwrap {
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ==========================================================================
+   Layer rail
+   ========================================================================== */
+
+.ow-rail {
+  background: var(--panel-solid);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.ow-railhead {
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--line);
+}
+.ow-railhead b {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+.ow-railhead .n {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  color: var(--ink3);
+}
+
+.ow-sec {
+  padding: 14px 15px 6px;
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+}
+
+.ow-lay {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 15px;
+  font-size: 12.5px;
+  color: var(--ink2);
+  cursor: pointer;
+  transition: color 0.15s;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  font-family: inherit;
+}
+.ow-lay:hover {
+  color: var(--ink);
+}
+.ow-lay .sw {
+  width: 28px;
+  height: 16px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.1);
+  position: relative;
+  flex: none;
+  transition: 0.18s;
+}
+.ow-lay .sw::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #7a8590;
+  transition: 0.18s;
+}
+.ow-lay.on {
+  color: var(--ink);
+}
+.ow-lay.on .sw {
+  background: var(--ok);
+}
+.ow-lay.on .sw::after {
+  left: 14px;
+  background: #062019;
+}
+.ow-lay .ct {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  color: var(--ink3);
+}
+.ow-lay:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.ow-lay:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: -2px;
+}
+
+/* The mockup's #facts block: quiet, wide-leading prose in the rail. */
+.ow-facts {
+  padding: 4px 15px 12px;
+  font-size: 11.5px;
+  color: var(--ink2);
+  line-height: 1.9;
+}
+.ow-facts b {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.ow-railnote {
+  padding: 4px 15px 12px;
+  font-size: 11.5px;
+  color: var(--ink3);
+  line-height: 1.55;
+}
+.ow-railnote b {
+  color: var(--ink2);
+}
+
+.ow-raillinks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 15px 18px;
+}
+.ow-raillinks a {
+  font-size: 12px;
+  color: var(--ink2);
+  text-decoration: none;
+  transition: color 0.12s;
+}
+.ow-raillinks a:hover {
+  color: var(--ok);
+}
+
+/*
+  Deviation from the mockup, which simply drops the rail under 900px. Ours
+  carries the only control for what is on the map, so it becomes a
+  slide-over reached from a "Layers" tool button that only exists at this
+  width.
+*/
+.ow-railtoggle {
+  display: none;
+}
+@media (max-width: 900px) {
+  .ow-mapwrap {
+    grid-template-columns: 1fr;
+  }
+  .ow-rail {
+    position: absolute;
+    z-index: 30;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 250px;
+    max-width: 82vw;
+    transform: translateX(-100%);
+    transition: transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.55);
+  }
+  .ow-rail.open {
+    transform: none;
+  }
+  .ow-railtoggle {
+    display: inline-block;
+  }
+  /* The open rail lies over the map's own top-left corner — move the tools,
+     including the button that closes the rail again, clear of it. */
+  .ow-mapwrap.railopen .ow-tools {
+    left: 264px;
+    max-width: calc(100% - 278px);
+  }
+}
+
+/* ==========================================================================
+   Map area + floating chrome
+   ========================================================================== */
+
+.ow-maparea {
+  position: relative;
+  min-height: 0;
+  background: radial-gradient(1100px 750px at 60% 40%, #121822 0%, #0b0e12 72%);
+}
+
+.ow-tools {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: flex;
+  gap: 8px;
+  z-index: 15;
+  flex-wrap: wrap;
+  max-width: calc(100% - 340px);
+}
+
+.ow-tbtn {
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink2);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  transition: 0.12s;
+  cursor: pointer;
+  text-decoration: none;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.ow-tbtn:hover {
+  color: var(--ink);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.ow-tbtn.on {
+  background: var(--sel);
+  border-color: var(--sel);
+  color: #fff;
+}
+.ow-tbtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ow-tbtn:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: 2px;
+}
+
+.ow-zoomctl {
+  position: absolute;
+  right: 14px;
+  bottom: 48px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  z-index: 15;
+}
+.ow-zoomctl button {
+  width: 38px;
+  height: 36px;
+  font-size: 17px;
+  color: var(--ink2);
+  display: grid;
+  place-items: center;
+  transition: 0.12s;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+.ow-zoomctl button:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+}
+.ow-zoomctl button + button {
+  border-top: 1px solid var(--line);
+}
+.ow-zoomctl button:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: -2px;
+}
+
+/*
+  HUD. The mockup puts the scale bar at bottom:12px; the real map has to show
+  the USGS imagery credit down there (CLAUDE.md #3), so the scale bar sits
+  one row up and the credit is restyled into the same HUD chip.
+*/
+.ow-hudL {
+  position: absolute;
+  bottom: 40px;
+  left: 14px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  color: var(--ink2);
+  z-index: 15;
+  pointer-events: none;
+}
+.ow-hudL .sb {
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.ow-hudL .sb .b {
+  height: 3px;
+  background: var(--ink2);
+  margin-top: 4px;
+  border-radius: 2px;
+}
+
+.ow-hudR {
+  position: absolute;
+  bottom: 12px;
+  right: 14px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  color: var(--ink3);
+  text-align: right;
+  z-index: 15;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  pointer-events: none;
+}
+.ow-hudR b {
+  color: var(--ink2);
+}
+
+.ow-maparea .maplibregl-ctrl-bottom-left {
+  z-index: 14;
+}
+.ow-maparea .maplibregl-ctrl-attrib {
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink3);
+}
+.ow-maparea .maplibregl-ctrl-attrib a {
+  color: var(--ink3);
+}
+
+/* ==========================================================================
+   Draw-session panels — same blurred --panel treatment as the rest of the
+   floating chrome, so an edit session does not change the language.
+   ========================================================================== */
+
+.ow-mappanel {
+  position: absolute;
+  z-index: 16;
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.ow-drawtools {
+  top: 62px;
+  left: 14px;
+  width: 118px;
+}
+.ow-drawtools .grp {
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+}
+.ow-drawtool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: var(--ink2);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: 0.12s;
+}
+.ow-drawtool:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+}
+.ow-drawtool.on {
+  background: var(--sel);
+  color: #fff;
+}
+.ow-drawtool .lb {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.ow-drawtool:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: -2px;
+}
+
+.ow-mapfield {
+  border-top: 1px solid var(--line);
+  padding: 9px 10px;
+}
+.ow-mapfield .k {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.ow-mapinput,
+.ow-mapselect {
+  width: 100%;
+  background: rgba(11, 14, 18, 0.7);
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 7px;
+}
+.ow-mapinput:focus-visible,
+.ow-mapselect:focus-visible {
+  outline: 2px solid var(--ok);
+  outline-offset: -1px;
+}
+.ow-mapinput {
+  font-family: var(--mono);
+}
+.ow-mapselect:disabled {
+  opacity: 0.5;
+}
+
+.ow-nameprompt {
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 288px;
+  max-width: calc(100% - 28px);
+  z-index: 21;
+}
+.ow-nameprompt .bd {
+  padding: 12px 14px;
+}
+.ow-nameprompt .k {
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  font-weight: 700;
+}
+.ow-nameprompt .hint {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink3);
+}
+.ow-nameprompt .row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.ow-mapmsg {
+  position: absolute;
+  bottom: 78px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 16;
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  padding: 8px 13px;
+  font-size: 12px;
+  color: var(--ink);
+  max-width: min(420px, calc(100% - 28px));
+}
+.ow-mapmsg.crit {
+  color: var(--crit);
+  border-color: rgba(255, 92, 56, 0.45);
+}
+
+.ow-mapempty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, calc(100% - 40px));
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.55);
+  padding: 16px 18px;
+  z-index: 16;
+}
+.ow-mapempty b {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 5px;
+}
+.ow-mapempty p {
+  font-size: 12px;
+  color: var(--ink2);
+  line-height: 1.55;
+}
+
+.ow-drawer .ow-danger {
+  padding: 11px 15px;
+  border-top: 1px solid var(--line);
+}
+.ow-drawer .ow-danger .warn {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink3);
+  margin-bottom: 7px;
+  line-height: 1.5;
+}
+.ow-drawer .ow-danger .warn .machine {
+  color: var(--ink);
+}
+.ow-btn.danger {
+  border-color: rgba(255, 92, 56, 0.5);
+  color: var(--crit);
+}
+.ow-btn.danger:hover {
+  border-color: var(--crit);
+}
+.ow-msg {
+  padding: 0 15px 11px;
+  font-size: 11.5px;
+  color: var(--ink2);
+}
+.ow-msg.crit {
+  color: var(--crit);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ow-lay .sw,
+  .ow-lay .sw::after,
+  .ow-rail {
+    transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .ow-tools {
+    max-width: calc(100% - 28px);
+  }
+}

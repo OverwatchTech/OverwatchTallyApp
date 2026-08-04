@@ -10,14 +10,36 @@
 // screen. This screen used to divide raw as-fed tonnage by its own trailing
 // 7-day average, which read weeks longer than the forecast screen and the alert
 // that links here. The full treatment is one click away, and the card says so.
+//
+// ===========================================================================
+// RE-SKIN (docs/reference/portal-mockup.html). Presentation only.
+// ===========================================================================
+// Not one number, unit, rounding, threshold or query changed. What changed:
+// the bordered boxes became `Kpi` with its coloured rail, the sections became
+// `Card` with `.hd` / `.bd` / dashed `.note`, the chart legend moved out of
+// Recharts and into the card header where the mockup puts it, and hay on hand
+// became a `DataTable` instead of a grid of sub-cards. Every caveat the old
+// screen carried is still on the screen — the nominal-bale-weight warning, the
+// per-stack provenance line, the "fed means" definition, and all three empty
+// states. If a disclosure would not fit a cell, it got its own column.
 
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { RATE_WINDOW_DAYS } from '@overwatch/forecast';
 import { createClient } from '@/lib/supabase/server';
 import { claimsFromSession, isManagerOrOwner } from '@/lib/auth/claims';
-import { formatMeasure } from '@overwatch/ui';
-import { OpsHeader } from '@/lib/ops/ops-header';
+import {
+  Card,
+  DataTable,
+  Kpi,
+  KpiGrid,
+  Legend,
+  LegendLine,
+  LegendSwatch,
+  Pad,
+  formatMeasure,
+  type DataTableColumn,
+} from '@overwatch/ui';
 import {
   fetchFarm,
   fetchFeatureIndex,
@@ -34,6 +56,8 @@ import {
   rateDayKeys,
   scheduledKgPerDay,
   parseWindows,
+  type AdherenceDay,
+  type InventoryLine,
 } from '@/lib/ops/feed';
 import {
   computeDaysOfFeed,
@@ -42,10 +66,13 @@ import {
   fetchWasteFactors,
   resolveWasteFactor,
 } from '@/lib/ops/days-of-feed';
+import { penSeriesColor } from '@/lib/ops/palette';
 import { fetchWeatherWindow } from '@/lib/ops/weather';
 import { clockTime, dayLabel } from '@/lib/ops/tz';
 import { FeedChart, type FeedChartRow } from './feed-chart';
+import { OpsScreenHeader } from './ops-nav';
 import { SetScheduleForm } from './set-schedule-form';
+import styles from './ops.module.css';
 
 const WINDOW_DAYS = 14;
 
@@ -56,6 +83,16 @@ function usd(value: number, digits = 2): string {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+/**
+ * Split "1,857 lb" so the Kpi can render the unit as its small trailing
+ * `<small>`. formatMeasure stays the only thing that converts.
+ */
+function splitUnit(formatted: string): { value: string; unit?: string } {
+  const cut = formatted.lastIndexOf(' ');
+  if (cut < 0) return { value: formatted };
+  return { value: formatted.slice(0, cut), unit: formatted.slice(cut + 1) };
 }
 
 function feedTypeLabel(feedType: string, cutting: number | null): string {
@@ -147,146 +184,241 @@ export default async function FeedPage({ params }: { params: Promise<{ farmId: s
   const band = daysBandLabel(daysOfFeed.leading);
 
   const todayKg = daily[daily.length - 1]?.totalKg ?? 0;
+  const today = splitUnit(formatMeasure(todayKg, 'kg', { digits: 0 }));
+
+  // ── Adherence table columns ─────────────────────────────────────────────
+  const adherenceTable: Array<DataTableColumn<AdherenceDay>> = [
+    {
+      key: 'day',
+      header: 'Day',
+      mono: true,
+      cell: (d) => dayLabel(d.day),
+    },
+    ...adherenceColumns.map((c) => ({
+      key: `${c.scheduleId}-${c.windowTime}`,
+      header: (
+        <>
+          {c.label} <span className="machine">{c.windowTime}</span>
+        </>
+      ),
+      mono: true,
+      cell: (d: AdherenceDay) => {
+        const cell = d.cells.find(
+          (x) => x.scheduleId === c.scheduleId && x.windowTime === c.windowTime,
+        );
+        if (!cell) return <span style={{ color: 'var(--ink3)' }}>—</span>;
+        const fedClock = cell.fedAt ? clockTime(new Date(cell.fedAt), tz) : null;
+        if (cell.status === 'in_window') {
+          return <span style={{ color: 'var(--ok)' }}>fed {fedClock}</span>;
+        }
+        if (cell.status === 'off_window') {
+          return <span style={{ color: 'var(--ink2)' }}>off window · fed {fedClock}</span>;
+        }
+        // A missed feeding is a thing that is actually wrong. It is the one
+        // place on this screen crit belongs.
+        return <span style={{ color: 'var(--crit)' }}>not fed</span>;
+      },
+    })),
+  ];
+
+  // ── Hay on hand ─────────────────────────────────────────────────────────
+  // Was a grid of sub-cards; it is a table now. The per-stack provenance
+  // sentence did not fit a cell, so it became its own column rather than
+  // being dropped — "weighed here" and "book figure" are different claims
+  // and the reader has to be able to tell which one a tonnage rests on.
+  const inventoryTable: Array<DataTableColumn<InventoryLine>> = [
+    {
+      key: 'feed',
+      header: 'Feed',
+      cell: (line) => (
+        <>
+          {feedTypeLabel(line.feedType, line.cutting)}
+          {line.baleLabel !== null && (
+            <span className="machine" style={{ color: 'var(--ink3)' }}>
+              {' '}
+              · {line.baleLabel}
+            </span>
+          )}
+        </>
+      ),
+    },
+    { key: 'bales', header: 'Bales', mono: true, align: 'right', cell: (l) => l.baleCount },
+    {
+      key: 'baleweight',
+      header: 'Bale weight',
+      mono: true,
+      align: 'right',
+      cell: (l) =>
+        l.baleWeight === null ? '—' : formatMeasure(l.baleWeight.weightKg, 'kg', { digits: 0 }),
+    },
+    {
+      key: 'provenance',
+      header: 'Where it came from',
+      cell: (l) =>
+        l.baleWeight === null ? (
+          <span style={{ color: 'var(--ink3)' }}>no bale type on this stack — tonnage unknown</span>
+        ) : l.baleWeight.provenance === 'measured' ? (
+          <span style={{ color: 'var(--ok)' }}>from your truck-scale calibration</span>
+        ) : (
+          <span style={{ color: 'var(--ink2)' }}>nominal — no scale calibration yet</span>
+        ),
+    },
+    {
+      key: 'asfed',
+      header: 'As-fed',
+      mono: true,
+      align: 'right',
+      cell: (l) => (l.onHandKg === null ? '—' : `est. ${formatMeasure(l.onHandKg, 'kg_ton')}`),
+    },
+    {
+      key: 'dm',
+      header: 'Dry matter',
+      mono: true,
+      align: 'right',
+      cell: (l) =>
+        l.dmAdjustedKg === null ? '—' : `est. ${formatMeasure(l.dmAdjustedKg, 'kg_ton')}`,
+    },
+    {
+      key: 'dmpct',
+      header: 'DM',
+      mono: true,
+      align: 'right',
+      cell: (l) => `${l.dryMatterPct}%`,
+    },
+  ];
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <OpsHeader
+    <Pad>
+      <OpsScreenHeader
         farmId={farm.id}
-        farmName={farm.name}
-        timezone={tz}
         active="feed"
-        subtitle={`Feed · last ${WINDOW_DAYS} days`}
+        title="Feed"
+        sub={
+          <>
+            {farm.name} · {tz} · dispensed, scheduled and on hand over the last{' '}
+            <b>{WINDOW_DAYS} days</b>
+          </>
+        }
       />
 
-      {/* Headline strip */}
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Dispensed today</p>
-          <p className="machine mt-1 text-lg text-foreground">
-            {formatMeasure(todayKg, 'kg', { digits: 0 })}
-          </p>
-        </div>
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Ration cost / day</p>
-          <p className="machine mt-1 text-lg text-hay">
-            {rollup.estCostPerDay !== null ? usd(rollup.estCostPerDay, 0) : '—'}
-          </p>
-          <p className="text-xs text-hay/70">estimated</p>
-        </div>
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Cost / head / day</p>
-          <p className="machine mt-1 text-lg text-hay">
-            {rollup.estCostPerHeadPerDay !== null ? usd(rollup.estCostPerHeadPerDay) : '—'}
-          </p>
-          <p className="text-xs text-hay/70">
-            estimated{rollup.headCount !== null ? ` · ${rollup.headCount} head` : ''}
-          </p>
-        </div>
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Days of feed on hand</p>
-          <p className="machine mt-1 text-lg text-hay">
-            {daysOfFeed.leading.days !== null ? daysOfFeed.leading.days.toFixed(1) : '—'}
-          </p>
-          <p className="text-xs text-hay/70">
-            {band !== null ? `projected · ${band}` : 'projected at the recent feed rate'}
-          </p>
-          <p className="mt-1 text-xs text-faint">
-            <Link
-              href={`/farms/${farm.id}/forecast`}
-              className="underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              What went into this
-            </Link>
-          </p>
-        </div>
-      </section>
+      <KpiGrid>
+        <Kpi
+          label="Dispensed today"
+          value={today.value}
+          unit={today.unit}
+          sub="as fed · measured"
+          accent="ok"
+        />
+        <Kpi
+          label="Ration cost / day"
+          value={rollup.estCostPerDay !== null ? usd(rollup.estCostPerDay, 0) : '—'}
+          sub="estimated"
+          accent="hay"
+        />
+        <Kpi
+          label="Cost / head / day"
+          value={rollup.estCostPerHeadPerDay !== null ? usd(rollup.estCostPerHeadPerDay) : '—'}
+          sub={`estimated${rollup.headCount !== null ? ` · ${rollup.headCount} head` : ''}`}
+          accent="hay"
+        />
+        <Kpi
+          label="Days of feed on hand"
+          value={daysOfFeed.leading.days !== null ? daysOfFeed.leading.days.toFixed(1) : '—'}
+          unit="days"
+          accent="hay"
+          sub={
+            <>
+              {band !== null ? `projected · ${band}` : 'projected at the recent feed rate'} ·{' '}
+              <Link
+                href={`/farms/${farm.id}/forecast`}
+                style={{
+                  color: 'var(--ok)',
+                  textDecoration: 'underline',
+                  textUnderlineOffset: 2,
+                }}
+              >
+                What went into this
+              </Link>
+            </>
+          }
+        />
+      </KpiGrid>
 
       {/* Dispensed vs scheduled */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-base font-medium">Dispensed by pen</h2>
-          <p className="machine text-xs text-muted">
+      <Card
+        title="Dispensed by pen"
+        sub={
+          <span className="machine">
             {sourceCounts.sensor_derived} sensor-derived · {sourceCounts.crew_logged} crew-logged ·{' '}
             {sourceCounts.truck_scale} truck-scale
-          </p>
-        </div>
+          </span>
+        }
+        aside={
+          feed.events.length > 0 ? (
+            <Legend>
+              {penIds.map((id, i) => (
+                <LegendSwatch key={id} color={penSeriesColor(i)}>
+                  {penName(id)}
+                </LegendSwatch>
+              ))}
+              {showScheduleLine && <LegendLine color="rgba(255,255,255,.55)">scheduled</LegendLine>}
+            </Legend>
+          ) : undefined
+        }
+        note={
+          feed.events.length > 0 ? (
+            showScheduleLine ? (
+              <>
+                <b>Reading it:</b> every bar is feed that actually went out, stacked by pen, from
+                bunk sensors and crew logs — the mix is in the header. The dashed line is the
+                scheduled target for that day. A target is a plan, not a projection, so it is not
+                drawn in hay.
+              </>
+            ) : (
+              <>No scheduled target to draw — feedings are shown as delivered.</>
+            )
+          ) : undefined
+        }
+      >
         {feed.events.length > 0 ? (
-          <>
-            <FeedChart data={chartRows} penNames={penIds.map(penName)} showScheduleLine={showScheduleLine} />
-            {!showScheduleLine && (
-              <p className="mt-2 text-xs text-faint">
-                No scheduled target to draw — feedings are shown as delivered.
-              </p>
-            )}
-          </>
+          <FeedChart
+            data={chartRows}
+            penNames={penIds.map(penName)}
+            showScheduleLine={showScheduleLine}
+          />
         ) : (
-          <p className="text-sm text-muted">
+          <p className={styles.hint}>
             No feedings recorded in the last {WINDOW_DAYS} days. Bunk sensors and crew logs land
             here as they happen.
           </p>
         )}
-      </section>
+      </Card>
 
       {/* Adherence */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <h2 className="mb-4 text-base font-medium">Schedule adherence</h2>
-        {hasSchedule ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-hairline text-xs text-muted">
-                  <th className="py-2 pr-4 font-normal">Day</th>
-                  {adherenceColumns.map((c) => (
-                    <th key={`${c.scheduleId}-${c.windowTime}`} className="py-2 pr-4 font-normal">
-                      {c.label} <span className="machine">{c.windowTime}</span>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {[...adherence].reverse().map((d) => (
-                  <tr key={d.day} className="border-b border-hairline/50">
-                    <td className="machine py-2 pr-4 text-xs text-muted">{dayLabel(d.day)}</td>
-                    {adherenceColumns.map((c) => {
-                      const cell = d.cells.find(
-                        (x) => x.scheduleId === c.scheduleId && x.windowTime === c.windowTime,
-                      );
-                      if (!cell) {
-                        return (
-                          <td key={`${c.scheduleId}-${c.windowTime}`} className="py-2 pr-4 text-faint">
-                            —
-                          </td>
-                        );
-                      }
-                      const fedClock = cell.fedAt ? clockTime(new Date(cell.fedAt), tz) : null;
-                      return (
-                        <td key={`${c.scheduleId}-${c.windowTime}`} className="machine py-2 pr-4 text-xs">
-                          {cell.status === 'in_window' && (
-                            <span className="text-accent">fed {fedClock}</span>
-                          )}
-                          {cell.status === 'off_window' && (
-                            <span className="text-muted">off window · fed {fedClock}</span>
-                          )}
-                          {cell.status === 'not_fed' && (
-                            <span className="text-alert">not fed</span>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="mt-3 text-xs text-faint">
+      {hasSchedule ? (
+        <Card
+          title="Schedule adherence"
+          padded={false}
+          note={
+            <>
               &ldquo;Fed&rdquo; means a feeding landed inside the window plus its grace period, in
               farm time.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-4">
+            </>
+          }
+        >
+          <DataTable
+            caption="Feeding windows met, by day"
+            columns={adherenceTable}
+            rows={[...adherence].reverse()}
+            rowKey={(d) => d.day}
+          />
+        </Card>
+      ) : (
+        <Card title="Schedule adherence">
+          <div className={styles.stack}>
             <div>
-              <h3 className="text-sm font-medium text-foreground">No feed schedule set</h3>
-              <p className="mt-1 text-sm text-muted">
+              <p className={styles.hintTitle}>No feed schedule set</p>
+              <p className={styles.hint}>
                 Feedings are being logged, but there is no schedule to judge them against — on-time
                 or missed can&rsquo;t be called without one.
               </p>
@@ -294,81 +426,49 @@ export default async function FeedPage({ params }: { params: Promise<{ farmId: s
             {canManage ? (
               <SetScheduleForm farmId={farm.id} />
             ) : (
-              <p className="text-xs text-faint">A manager or the owner can set one.</p>
+              <p className={styles.prose}>A manager or the owner can set one.</p>
             )}
           </div>
-        )}
-      </section>
+        </Card>
+      )}
 
-      {/* Inventory strip */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-base font-medium">Hay on hand</h2>
-          {rollup.recentDailyKg !== null && (
-            <p className="machine text-xs text-muted">
+      {/* Inventory */}
+      <Card
+        title="Hay on hand"
+        padded={lines.length === 0}
+        sub={
+          rollup.recentDailyKg !== null ? (
+            <span className="machine">
               feeding {formatMeasure(rollup.recentDailyKg, 'kg', { digits: 0 })}/day over{' '}
               {rate.daysCounted === RATE_WINDOW_DAYS
                 ? `the last ${RATE_WINDOW_DAYS} days`
                 : `the ${rate.daysCounted} logged ${rate.daysCounted === 1 ? 'day' : 'days'} in the last ${RATE_WINDOW_DAYS}`}
-            </p>
-          )}
-        </div>
+            </span>
+          ) : undefined
+        }
+        note={
+          rollup.usesNominalBaleWeight && lines.length > 0 ? (
+            <>
+              Cost figures use nominal bale weights where no truck-scale calibration exists — weigh
+              a load to tighten these numbers.
+            </>
+          ) : undefined
+        }
+      >
         {lines.length > 0 ? (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {lines.map((line) => (
-              <div key={line.id} className="rounded-md border border-hairline p-4">
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-sm font-medium text-foreground">
-                    {feedTypeLabel(line.feedType, line.cutting)}
-                  </p>
-                  {line.baleLabel && <p className="machine text-xs text-muted">{line.baleLabel}</p>}
-                </div>
-                <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
-                  <div>
-                    <dt className="text-muted">Bales</dt>
-                    <dd className="machine mt-0.5 text-sm text-foreground">{line.baleCount}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted">As-fed</dt>
-                    <dd className="machine mt-0.5 text-sm text-foreground">
-                      {line.onHandKg !== null
-                        ? `est. ${formatMeasure(line.onHandKg, 'kg_ton')}`
-                        : '—'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted">DM</dt>
-                    <dd className="machine mt-0.5 text-sm text-foreground">
-                      {line.dmAdjustedKg !== null
-                        ? `est. ${formatMeasure(line.dmAdjustedKg, 'kg_ton')}`
-                        : '—'}
-                    </dd>
-                  </div>
-                </dl>
-                <p className="mt-3 text-xs text-faint">
-                  {line.baleWeight
-                    ? line.baleWeight.provenance === 'measured'
-                      ? `bale weight from your truck-scale calibration (${formatMeasure(line.baleWeight.weightKg, 'kg', { digits: 0 })}/bale)`
-                      : `bale weight is the nominal ${formatMeasure(line.baleWeight.weightKg, 'kg', { digits: 0 })}/bale — no scale calibration yet`
-                    : 'no bale type on this stack — tonnage unknown'}
-                  {` · DM ${line.dryMatterPct}%`}
-                </p>
-              </div>
-            ))}
-          </div>
+          <DataTable
+            caption="Hay and commodity on hand, by stack"
+            columns={inventoryTable}
+            rows={lines}
+            rowKey={(l) => l.id}
+          />
         ) : (
-          <p className="text-sm text-muted">
+          <p className={styles.hint}>
             No hay stacks or commodity bins on the books yet. Inventory shows up once deliveries or
             stack counts are recorded.
           </p>
         )}
-        {rollup.usesNominalBaleWeight && lines.length > 0 && (
-          <p className="mt-3 text-xs text-faint">
-            Cost figures use nominal bale weights where no truck-scale calibration exists — weigh a
-            load to tighten these numbers.
-          </p>
-        )}
-      </section>
-    </div>
+      </Card>
+    </Pad>
   );
 }

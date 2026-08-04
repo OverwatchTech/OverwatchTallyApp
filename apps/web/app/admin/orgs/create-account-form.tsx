@@ -4,7 +4,7 @@
 // account with no farm has nowhere to put data.
 import { useActionState } from 'react';
 import { IDLE } from '@/lib/admin/action-state';
-import { Field, FormNote, buttonClass, inputClass } from '@/lib/admin/ui';
+import { Field, FormNote, buttonClass, inputClass } from '../console-ui';
 import { MIN_REASON_LENGTH } from '@/lib/admin/impersonation';
 import { createAccount } from './actions';
 
@@ -12,8 +12,8 @@ export function CreateAccountForm() {
   const [state, formAction, pending] = useActionState(createAccount, IDLE);
 
   return (
-    <form action={formAction} className="space-y-3 p-4">
-      <div className="grid gap-3 sm:grid-cols-2">
+    <form action={formAction} className="ow-form">
+      <div className="ow-fgrid">
         <Field label="Account name">
           <input name="orgName" required className={inputClass} placeholder="Circle B Cattle Co" />
         </Field>
@@ -44,7 +44,7 @@ export function CreateAccountForm() {
         />
       </Field>
 
-      <div className="flex items-center gap-3">
+      <div className="ow-inline">
         <button type="submit" disabled={pending} className={buttonClass(true)}>
           {pending ? 'Creating…' : 'Create account'}
         </button>

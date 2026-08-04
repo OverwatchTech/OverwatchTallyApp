@@ -3,9 +3,12 @@
 // something is already going wrong.
 //
 // Stacked by outcome: normalized (teal — live data arriving and landing),
-// ignored (muted — acknowledged, not data), dead-lettered (alert — actually
+// ignored (grey — acknowledged, not data), dead-lettered (alert — actually
 // wrong). Colour follows CLAUDE.md #4 and nothing here is decorative.
-import { tokens } from '@overwatch/ui';
+//
+// `tokens` rather than var(--ok) because these are SVG fills generated in
+// TypeScript, which is the one place a custom property cannot reach.
+import { Legend, LegendSwatch, tokens } from '@overwatch/ui';
 import type { IngestRate } from '@/lib/admin/ingest';
 
 const HEIGHT = 96;
@@ -20,13 +23,13 @@ export function RateChart({ rate }: { rate: IngestRate }) {
   const label = rate.bucketMinutes >= 60 ? `${rate.bucketMinutes / 60}h` : `${rate.bucketMinutes}m`;
 
   return (
-    <figure className="space-y-2 px-4 py-4">
+    <figure className="ow-bd">
       <svg
         viewBox={`0 0 ${width} ${HEIGHT}`}
         preserveAspectRatio="none"
         role="img"
         aria-label={`Raw events per ${label} over the last ${rate.windowHours} hours. Peak ${peak}.`}
-        className="h-24 w-full"
+        style={{ height: '96px', width: '100%', display: 'block' }}
       >
         {buckets.map((bucket, index) => {
           const x = index * (barWidth + GAP);
@@ -38,10 +41,10 @@ export function RateChart({ rate }: { rate: IngestRate }) {
 
           let y = HEIGHT;
           const segments: { h: number; fill: string; opacity: number }[] = [
-            { h: normalized, fill: tokens.teal, opacity: 0.85 },
-            { h: pending, fill: tokens.paper, opacity: 0.25 },
-            { h: ignored, fill: tokens.paper, opacity: 0.4 },
-            { h: dead, fill: tokens.alert, opacity: 0.95 },
+            { h: normalized, fill: tokens.ok, opacity: 0.85 },
+            { h: pending, fill: tokens.ink3, opacity: 0.45 },
+            { h: ignored, fill: tokens.ink2, opacity: 0.5 },
+            { h: dead, fill: tokens.crit, opacity: 0.95 },
           ];
 
           return (
@@ -66,37 +69,27 @@ export function RateChart({ rate }: { rate: IngestRate }) {
         })}
       </svg>
 
-      <figcaption className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted">
-        <span className="machine">
+      <figcaption
+        className="ow-inline"
+        style={{ justifyContent: 'space-between', marginTop: '9px' }}
+      >
+        <span className="ow-quiet ow-machine">
           {rate.total.toLocaleString('en-US')} events · peak {peak.toLocaleString('en-US')} per{' '}
           {label}
         </span>
-        <span className="flex flex-wrap gap-3">
-          <Key color={tokens.teal} label="normalized" />
-          <Key color={tokens.paper} label="ignored" faded />
-          <Key color={tokens.alert} label="dead-lettered" />
-        </span>
+        <Legend>
+          <LegendSwatch tone="ok">normalized</LegendSwatch>
+          <LegendSwatch color={tokens.ink2}>ignored</LegendSwatch>
+          <LegendSwatch tone="crit">dead-lettered</LegendSwatch>
+        </Legend>
       </figcaption>
 
       {rate.capped && (
-        <p className="text-xs text-alert">
+        <p className="ow-quiet ow-wrong" style={{ marginTop: '7px' }}>
           The scan stopped at {rate.total.toLocaleString('en-US')} rows. Every bar is a floor, not a
           count — narrow the window for a true figure.
         </p>
       )}
     </figure>
-  );
-}
-
-function Key({ color, label, faded }: { color: string; label: string; faded?: boolean }) {
-  return (
-    <span className="flex items-center gap-1">
-      <span
-        aria-hidden
-        className="inline-block h-2 w-2 rounded-[1px]"
-        style={{ backgroundColor: color, opacity: faded ? 0.4 : 0.9 }}
-      />
-      {label}
-    </span>
   );
 }

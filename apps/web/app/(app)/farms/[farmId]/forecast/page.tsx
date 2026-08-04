@@ -15,10 +15,36 @@
 // reorder date, weather-adjusted demand, projected cost — hay. Bale counts,
 // measured feed weights, head counts, drawdown rates — measured, so not hay.
 // Nothing here is orange; an assumption is not a fault.
+//
+// ===========================================================================
+// RE-SKIN (docs/reference/portal-mockup.html). Containers only. Read this.
+// ===========================================================================
+// This screen discloses bale weight and whether it was weighed or booked, dry
+// matter, waste and who chose it, the measured feeding rate, the weather
+// adjustment, the confidence and its reasons, and every assumption each of
+// those rests on. ALL OF IT SURVIVED VERBATIM. Nothing was moved behind a
+// tooltip, nothing was summarised, no `Why` was collapsed that used to be
+// open, and no InputTable row was dropped.
+//
+// The rule applied was: restyle the container, never the content. Where a
+// disclosure did not fit the mockup's tighter card, the container got bigger
+// — the two-up panel below is wider than the mockup's `.kv`, and the `Why`
+// blocks run the full width of their card rather than being squeezed into a
+// rail. The one thing the mockup contributes here that this screen did not
+// have is the DASHED rule: `.ow-note` marks a footnote, and every `Why` now
+// sits behind one, which is exactly what it is.
 
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
-import { formatMeasure } from '@overwatch/ui';
+import {
+  Card,
+  DataTable,
+  Kpi,
+  KpiGrid,
+  Pad,
+  formatMeasure,
+  type DataTableColumn,
+} from '@overwatch/ui';
 import {
   DEFAULT_WEATHER_CURVE,
   RATE_WINDOW_DAYS,
@@ -33,11 +59,12 @@ import {
 } from '@overwatch/forecast';
 
 import { createClient } from '@/lib/supabase/server';
-import { OpsHeader } from '@/lib/ops/ops-header';
-import { inventoryLines, measuredRate } from '@/lib/ops/feed';
+import { inventoryLines, measuredRate, type InventoryLine } from '@/lib/ops/feed';
 import { computeDaysOfFeed, daysOfFeedAssumptions } from '@/lib/ops/days-of-feed';
 import { fetchWeatherWindow } from '@/lib/ops/weather';
 
+import { OpsScreenHeader } from '../feed/ops-nav';
+import styles from '../feed/ops.module.css';
 import { fetchFarm, fetchForecastData } from './data';
 import { blendedPrice, dateLabel } from './compute';
 import {
@@ -65,6 +92,31 @@ function lbPerDay(kg: number | null): string {
 
 function money(value: number | null, digits = 2): string {
   return value === null ? '—' : `$${value.toFixed(digits)}`;
+}
+
+/** Split "12.4 days" so a Kpi can carry the unit as its small trailing bit. */
+function splitUnit(formatted: string): { value: string; unit?: string } {
+  const cut = formatted.lastIndexOf(' ');
+  if (cut < 0) return { value: formatted };
+  return { value: formatted.slice(0, cut), unit: formatted.slice(cut + 1) };
+}
+
+interface PenRow {
+  penId: string;
+  penRate: ReturnType<typeof measuredRate>;
+  head: number | null;
+  drawdown: ReturnType<typeof consumptionRate> | null;
+  sensorCount: number;
+}
+
+interface CostRow {
+  key: string;
+  label: string;
+  headCount: number;
+  feedKgPerDay: number | null;
+  costPerDay: number | null;
+  costPerHeadPerDay: number | null;
+  isTotal: boolean;
 }
 
 export default async function ForecastPage({
@@ -156,7 +208,7 @@ export default async function ForecastPage({
     ...new Set(daily.flatMap((d) => Object.keys(d.byPen))),
   ].filter((p) => p !== 'unassigned');
 
-  const penRows = pensWithFeed.map((penId) => {
+  const penRows: PenRow[] = pensWithFeed.map((penId) => {
     const penRate = measuredRate(daily, { penId });
     const groupId = herd.currentGroupByPen.get(penId);
     const head = groupId === undefined ? null : (herd.headCounts.get(groupId) ?? null);
@@ -210,86 +262,327 @@ export default async function ForecastPage({
     })
     .filter((a) => a.result.flagged);
 
+  // ── Table shapes ──────────────────────────────────────────────
+  const penColumns: Array<DataTableColumn<PenRow>> = [
+    { key: 'pen', header: 'Pen', cell: (r) => featureName(r.penId) },
+    {
+      key: 'head',
+      header: 'Head',
+      mono: true,
+      align: 'right',
+      cell: (r) => (r.head === null ? '—' : r.head.toLocaleString('en-US')),
+    },
+    {
+      key: 'fed',
+      header: 'Fed per day',
+      mono: true,
+      align: 'right',
+      cell: (r) => lbPerDay(r.penRate.kgPerDay),
+    },
+    {
+      key: 'perhead',
+      header: 'Per head',
+      mono: true,
+      align: 'right',
+      cell: (r) =>
+        r.head !== null && r.head > 0 && r.penRate.kgPerDay !== null
+          ? lbPerDay(r.penRate.kgPerDay / r.head)
+          : '—',
+    },
+    {
+      key: 'drawdown',
+      header: 'Bunk drawdown',
+      mono: true,
+      align: 'right',
+      cell: (r) =>
+        r.drawdown?.ratePerDay != null ? `${formatMeasure(r.drawdown.ratePerDay, 'mm')}/day` : '—',
+    },
+    {
+      key: 'fit',
+      header: 'Fit',
+      cell: (r) => (
+        <span style={{ color: 'var(--ink3)' }}>
+          {r.drawdown === null
+            ? 'no bunk sensor'
+            : `${r.drawdown.legsUsed} stretches · ${r.drawdown.refillsDetected} refills`}
+        </span>
+      ),
+    },
+  ];
+
+  const costRows: CostRow[] = [
+    ...costRollup.buckets.map((bucket) => ({
+      key: bucket.key,
+      label: featureName(bucket.key),
+      headCount: bucket.headCount,
+      feedKgPerDay: bucket.feedKgPerDay,
+      costPerDay: bucket.costPerDay,
+      costPerHeadPerDay: bucket.costPerHeadPerDay,
+      isTotal: false,
+    })),
+    {
+      key: '__all__',
+      label: 'All pens',
+      headCount: costRollup.total.headCount,
+      feedKgPerDay: costRollup.total.feedKgPerDay,
+      costPerDay: costRollup.total.costPerDay,
+      costPerHeadPerDay: costRollup.total.costPerHeadPerDay,
+      isTotal: true,
+    },
+  ];
+
+  const costColumns: Array<DataTableColumn<CostRow>> = [
+    { key: 'pen', header: 'Pen', cell: (r) => r.label },
+    {
+      key: 'head',
+      header: 'Head',
+      mono: true,
+      align: 'right',
+      cell: (r) => r.headCount.toLocaleString('en-US'),
+    },
+    {
+      key: 'fed',
+      header: 'Fed per day',
+      mono: true,
+      align: 'right',
+      cell: (r) => lbPerDay(r.feedKgPerDay),
+    },
+    {
+      key: 'costday',
+      header: 'Cost per day',
+      align: 'right',
+      cell: (r) => <Projected>{money(r.costPerDay)}</Projected>,
+    },
+    {
+      key: 'costhead',
+      header: 'Per head per day',
+      align: 'right',
+      cell: (r) => <Projected>{money(r.costPerHeadPerDay)}</Projected>,
+    },
+  ];
+
+  const stackColumns: Array<DataTableColumn<InventoryLine>> = [
+    {
+      key: 'feed',
+      header: 'Feed',
+      cell: (line) => (
+        <>
+          {line.feedType}
+          {line.cutting !== null && (
+            <span className="machine" style={{ color: 'var(--ink3)' }}>
+              {' '}
+              · cut {line.cutting}
+            </span>
+          )}
+          {line.baleLabel !== null && (
+            <span className="machine" style={{ color: 'var(--ink3)' }}>
+              {' '}
+              · {line.baleLabel}
+            </span>
+          )}
+        </>
+      ),
+    },
+    {
+      key: 'bales',
+      header: 'Bales',
+      mono: true,
+      align: 'right',
+      cell: (l) => l.baleCount.toLocaleString('en-US'),
+    },
+    {
+      key: 'baleweight',
+      header: 'Bale weight',
+      mono: true,
+      align: 'right',
+      cell: (l) => (l.baleWeight === null ? '—' : formatMeasure(l.baleWeight.weightKg, 'kg')),
+    },
+    {
+      key: 'weighed',
+      header: 'Weighed here?',
+      cell: (l) =>
+        l.baleWeight === null ? (
+          <span style={{ color: 'var(--ink3)' }}>no bale type set</span>
+        ) : l.baleWeight.provenance === 'measured' ? (
+          <span style={{ color: 'var(--ok)' }}>weighed</span>
+        ) : (
+          <span style={{ color: 'var(--ink2)' }}>book figure</span>
+        ),
+    },
+    {
+      key: 'dm',
+      header: 'Dry matter',
+      mono: true,
+      align: 'right',
+      cell: (l) => `${l.dryMatterPct.toFixed(1)}%`,
+    },
+    {
+      key: 'onhand',
+      header: 'On hand',
+      mono: true,
+      align: 'right',
+      cell: (l) => (l.onHandKg === null ? '—' : formatMeasure(l.onHandKg, 'kg_ton')),
+    },
+  ];
+
+  const onHand = splitUnit(days(leading.days));
+  const rateSplit = splitUnit(lbPerDay(rate.kgPerDay));
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <OpsHeader
+    <Pad>
+      <OpsScreenHeader
         farmId={farm.id}
-        farmName={farm.name}
-        timezone={farm.timezone}
         active="forecast"
-        subtitle={`Feed forecast · measured over ${WINDOW_DAYS} days`}
+        title="Forecast"
+        sub={
+          <>
+            {farm.name} · {farm.timezone} · feed measured over the last{' '}
+            <b>{WINDOW_DAYS} days</b>
+          </>
+        }
       />
 
-      <p className="max-w-3xl text-sm text-muted">
+      <p className={styles.lead}>
         Every projection on this page shows what went into it. Open{' '}
-        <span className="text-foreground">Why this number</span> under any figure to see the
-        bale count, the bale weight and whether it was weighed here or taken from a book, the dry
-        matter, the waste allowed for, and the rate this operation has actually been feeding.
-        Numbers in <span className="text-hay">this colour</span> are projections. Everything else
-        was measured.
+        <b>Why this number</b> under any figure to see the bale count, the bale weight and whether
+        it was weighed here or taken from a book, the dry matter, the waste allowed for, and the
+        rate this operation has actually been feeding. Numbers in{' '}
+        <span className={styles.projected}>this colour</span> are projections. Everything else was
+        measured.
       </p>
 
       {/* ── Headline ─────────────────────────────────────────── */}
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Feed on hand</p>
-          <p className="mt-1 text-lg">
-            <Projected>{days(leading.days)}</Projected>
-          </p>
-          <p className="machine mt-1 text-xs text-faint">
-            {leading.daysLow !== null && leading.daysHigh !== null
-              ? `${leading.daysLow.toFixed(1)}–${leading.daysHigh.toFixed(1)}`
-              : 'no range'}
-          </p>
-        </div>
-
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Order hay by</p>
-          <p className="mt-1 text-lg">
-            <Projected>{dateLabel(reorder.orderByIso, farm.timezone)}</Projected>
-          </p>
-          <p className="machine mt-1 text-xs text-faint">
-            {reorder.overdue
-              ? 'already past'
-              : reorder.orderInDays === null
-                ? 'not enough to say'
-                : `in ${Math.round(reorder.orderInDays)} days`}
-          </p>
-        </div>
-
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Cost per head per day</p>
-          <p className="mt-1 text-lg">
-            <Projected>{money(farmCost?.costPerHeadPerDay ?? null)}</Projected>
-          </p>
-          <p className="machine mt-1 text-xs text-faint">
-            {herd.currentHeadTotal === null
-              ? 'no head count'
-              : `${herd.currentHeadTotal.toLocaleString('en-US')} head`}
-          </p>
-        </div>
-
-        <div className="rounded-lg border border-hairline bg-card p-4">
-          <p className="text-xs text-muted">Feeding rate</p>
-          <p className="mt-1 text-lg">
-            <Measured>{lbPerDay(rate.kgPerDay)}</Measured>
-          </p>
-          <p className="machine mt-1 text-xs text-faint">as fed · measured</p>
-        </div>
-      </section>
+      <KpiGrid>
+        <Kpi
+          label="Feed on hand"
+          value={onHand.value}
+          unit={onHand.unit}
+          accent="hay"
+          sub={
+            <span className="machine">
+              {leading.daysLow !== null && leading.daysHigh !== null
+                ? `${leading.daysLow.toFixed(1)}–${leading.daysHigh.toFixed(1)}`
+                : 'no range'}
+            </span>
+          }
+        />
+        <Kpi
+          label="Order hay by"
+          value={dateLabel(reorder.orderByIso, farm.timezone)}
+          accent="hay"
+          sub={
+            <span className="machine">
+              {reorder.overdue
+                ? 'already past'
+                : reorder.orderInDays === null
+                  ? 'not enough to say'
+                  : `in ${Math.round(reorder.orderInDays)} days`}
+            </span>
+          }
+        />
+        <Kpi
+          label="Cost per head per day"
+          value={money(farmCost?.costPerHeadPerDay ?? null)}
+          accent="hay"
+          sub={
+            <span className="machine">
+              {herd.currentHeadTotal === null
+                ? 'no head count'
+                : `${herd.currentHeadTotal.toLocaleString('en-US')} head`}
+            </span>
+          }
+        />
+        {/* Measured, so not hay. */}
+        <Kpi
+          label="Feeding rate"
+          value={rateSplit.value}
+          unit={rateSplit.unit}
+          accent="ok"
+          sub={<span className="machine">as fed · measured</span>}
+        />
+      </KpiGrid>
 
       {/* ── Days of feed on hand ─────────────────────────────── */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-base font-medium">Days of feed on hand</h2>
-          <ConfidenceChip confidence={leading.confidence} />
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="rounded border border-hairline/60 p-4">
-            <p className="text-xs text-muted">Weather-adjusted</p>
+      <Card
+        title="Days of feed on hand"
+        aside={<ConfidenceChip confidence={leading.confidence} />}
+        note={
+          <Why
+            open
+            confidence={leading.confidence}
+            confidenceReasons={leading.confidenceReasons}
+            assumptions={[
+              // Not `leading.assumptions` verbatim: the package stamps the waste
+              // factor `source: 'caller'` because from inside the package a
+              // parameter WAS chosen by the caller. Only this layer knows whether
+              // the farm actually set it, so it supplies the honest line.
+              ...daysOfFeedAssumptions(leading, waste, farm.timezone),
+              ...demandAssumptions,
+              ...(adjustment?.assumptions ?? []),
+            ]}
+            extra={
+              <InputTable
+                rows={[
+                  { label: 'Bales on hand', value: stack === null ? null : stack.baleCount.toLocaleString('en-US') },
+                  {
+                    label: 'Bale weight used',
+                    value:
+                      stack === null
+                        ? null
+                        : `${formatMeasure(stack.baleWeightKg, 'kg')} · ${
+                            stack.baleWeightSource === 'calibrated'
+                              ? 'weighed on this farm'
+                              : 'book figure, not weighed here'
+                          }`,
+                  },
+                  { label: 'Weight on hand, as fed', value: stack === null ? null : formatMeasure(stack.asFedKg, 'kg_ton') },
+                  { label: 'Dry matter', value: stack === null ? null : `${stack.dryMatterPct.toFixed(1)}%` },
+                  {
+                    label: 'Waste allowed for',
+                    value:
+                      `${(waste.wasteFactor * 100).toFixed(0)}% · ` +
+                      (waste.scope === 'default'
+                        ? 'nobody here chose this'
+                        : waste.scope === 'pen'
+                          ? 'set for this pen'
+                          : 'set for this farm'),
+                  },
+                  { label: 'Feeding rate averaged over', value: `${RATE_WINDOW_DAYS} days` },
+                  { label: 'Dry matter that reaches an animal', value: leading.feedableDryMatterKg === null ? null : formatMeasure(leading.feedableDryMatterKg, 'kg_ton') },
+                  { label: 'Feeding rate, as fed', value: lbPerDay(rate.kgPerDay) },
+                  { label: 'Feeding rate, dry matter', value: Number.isFinite(toDm(rate.kgPerDay)) ? lbPerDay(toDm(rate.kgPerDay)) : null },
+                  { label: 'Days of feeding counted', value: String(rate.daysCounted) },
+                  {
+                    label: 'Weather-adjusted demand',
+                    value: adjustedDemand === null ? null : lbPerDay(adjustedDemand),
+                  },
+                  {
+                    label: 'Effective temperature',
+                    value: effectiveTempC === null ? null : formatMeasure(effectiveTempC, 'c'),
+                  },
+                  {
+                    label: 'Forecast source',
+                    value: weather === null ? null : `NWS gridpoint ${weather.gridpoint ?? ''} · ${weather.samples} readings`,
+                  },
+                  {
+                    label: 'Comfortable range used',
+                    value: `${formatMeasure(DEFAULT_WEATHER_CURVE.lowerCriticalTempC, 'c')} to ${formatMeasure(DEFAULT_WEATHER_CURVE.upperCriticalTempC, 'c')}`,
+                  },
+                  {
+                    label: 'Stacks left out for having no bale weight',
+                    value: stack === null || stack.lotsWithoutWeight === 0 ? null : String(stack.lotsWithoutWeight),
+                  },
+                ]}
+              />
+            }
+          />
+        }
+      >
+        <div className={styles.panels}>
+          <div className={styles.panel}>
+            <div className={styles.panelK}>Weather-adjusted</div>
             {daysAdjusted === null ? (
-              <p className="mt-2 text-sm text-muted">
+              <p className={styles.panelWhy}>
                 {centroid === null
                   ? 'No mapped features yet, so there is no point on the map to pull a forecast for.'
                   : weather === null
@@ -298,33 +591,31 @@ export default async function ForecastPage({
               </p>
             ) : (
               <>
-                <p className="mt-1 text-2xl">
-                  <Projected>{days(daysAdjusted.days)}</Projected>
-                </p>
-                <p className="machine mt-1 text-xs text-faint">
+                <div className={`${styles.panelV} ${styles.projected}`}>
+                  {days(daysAdjusted.days)}
+                </div>
+                <div className={styles.panelS}>
                   {daysAdjusted.daysLow !== null && daysAdjusted.daysHigh !== null
                     ? `${daysAdjusted.daysLow.toFixed(1)}–${daysAdjusted.daysHigh.toFixed(1)} days`
                     : 'no range'}
-                </p>
+                </div>
               </>
             )}
           </div>
 
-          <div className="rounded border border-hairline/60 p-4">
-            <p className="text-xs text-muted">Raw, no weather</p>
-            <p className="mt-1 text-2xl">
-              <Projected>{days(daysRaw.days)}</Projected>
-            </p>
-            <p className="machine mt-1 text-xs text-faint">
+          <div className={styles.panel}>
+            <div className={styles.panelK}>Raw, no weather</div>
+            <div className={`${styles.panelV} ${styles.projected}`}>{days(daysRaw.days)}</div>
+            <div className={styles.panelS}>
               {daysRaw.daysLow !== null && daysRaw.daysHigh !== null
                 ? `${daysRaw.daysLow.toFixed(1)}–${daysRaw.daysHigh.toFixed(1)} days`
                 : 'no range'}
-            </p>
+            </div>
           </div>
         </div>
 
         {adjustment !== null && weather !== null && (
-          <p className="mt-3 text-sm text-muted">
+          <p className={styles.hint} style={{ marginTop: 12 }}>
             {adjustment.zone === 'cold'
               ? 'Cold raises intake, so the stack goes further down than the raw number suggests.'
               : adjustment.zone === 'heat'
@@ -333,462 +624,279 @@ export default async function ForecastPage({
             {adjustment.capped && ' The adjustment hit its documented cap.'}
           </p>
         )}
-
-        <Why
-          open
-          confidence={leading.confidence}
-          confidenceReasons={leading.confidenceReasons}
-          assumptions={[
-            // Not `leading.assumptions` verbatim: the package stamps the waste
-            // factor `source: 'caller'` because from inside the package a
-            // parameter WAS chosen by the caller. Only this layer knows whether
-            // the farm actually set it, so it supplies the honest line.
-            ...daysOfFeedAssumptions(leading, waste, farm.timezone),
-            ...demandAssumptions,
-            ...(adjustment?.assumptions ?? []),
-          ]}
-          extra={
-            <InputTable
-              rows={[
-                { label: 'Bales on hand', value: stack === null ? null : stack.baleCount.toLocaleString('en-US') },
-                {
-                  label: 'Bale weight used',
-                  value:
-                    stack === null
-                      ? null
-                      : `${formatMeasure(stack.baleWeightKg, 'kg')} · ${
-                          stack.baleWeightSource === 'calibrated'
-                            ? 'weighed on this farm'
-                            : 'book figure, not weighed here'
-                        }`,
-                },
-                { label: 'Weight on hand, as fed', value: stack === null ? null : formatMeasure(stack.asFedKg, 'kg_ton') },
-                { label: 'Dry matter', value: stack === null ? null : `${stack.dryMatterPct.toFixed(1)}%` },
-                {
-                  label: 'Waste allowed for',
-                  value:
-                    `${(waste.wasteFactor * 100).toFixed(0)}% · ` +
-                    (waste.scope === 'default'
-                      ? 'nobody here chose this'
-                      : waste.scope === 'pen'
-                        ? 'set for this pen'
-                        : 'set for this farm'),
-                },
-                { label: 'Feeding rate averaged over', value: `${RATE_WINDOW_DAYS} days` },
-                { label: 'Dry matter that reaches an animal', value: leading.feedableDryMatterKg === null ? null : formatMeasure(leading.feedableDryMatterKg, 'kg_ton') },
-                { label: 'Feeding rate, as fed', value: lbPerDay(rate.kgPerDay) },
-                { label: 'Feeding rate, dry matter', value: Number.isFinite(toDm(rate.kgPerDay)) ? lbPerDay(toDm(rate.kgPerDay)) : null },
-                { label: 'Days of feeding counted', value: String(rate.daysCounted) },
-                {
-                  label: 'Weather-adjusted demand',
-                  value: adjustedDemand === null ? null : lbPerDay(adjustedDemand),
-                },
-                {
-                  label: 'Effective temperature',
-                  value: effectiveTempC === null ? null : formatMeasure(effectiveTempC, 'c'),
-                },
-                {
-                  label: 'Forecast source',
-                  value: weather === null ? null : `NWS gridpoint ${weather.gridpoint ?? ''} · ${weather.samples} readings`,
-                },
-                {
-                  label: 'Comfortable range used',
-                  value: `${formatMeasure(DEFAULT_WEATHER_CURVE.lowerCriticalTempC, 'c')} to ${formatMeasure(DEFAULT_WEATHER_CURVE.upperCriticalTempC, 'c')}`,
-                },
-                {
-                  label: 'Stacks left out for having no bale weight',
-                  value: stack === null || stack.lotsWithoutWeight === 0 ? null : String(stack.lotsWithoutWeight),
-                },
-              ]}
-            />
-          }
-        />
-      </section>
+      </Card>
 
       {/* ── Reorder ──────────────────────────────────────────── */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <h2 className="mb-4 text-base font-medium">When to order</h2>
-        <div className="grid gap-4 sm:grid-cols-3">
+      <Card
+        title="When to order"
+        note={
+          <Why
+            confidence={reorder.confidence}
+            confidenceReasons={reorder.confidenceReasons}
+            assumptions={[
+              ...reorder.assumptions,
+              DEFAULT_ASSUMPTIONS['leadTime'] as Assumption,
+              DEFAULT_ASSUMPTIONS['safetyStock'] as Assumption,
+            ]}
+            extra={
+              <InputTable
+                rows={[
+                  { label: 'Days on hand it was given', value: days(leading.days) },
+                  { label: 'Lead time', value: `${DEFAULT_LEAD_TIME_DAYS} days` },
+                  { label: 'Safety stock', value: `${DEFAULT_SAFETY_STOCK_DAYS} days` },
+                ]}
+              />
+            }
+          />
+        }
+      >
+        <div className={styles.trio}>
           <div>
-            <p className="text-xs text-muted">Order by</p>
-            <p className="mt-1 text-lg">
-              <Projected>{dateLabel(reorder.orderByIso, farm.timezone)}</Projected>
-            </p>
+            <div className={styles.panelK}>Order by</div>
+            <div className={`${styles.panelV} ${styles.projected}`}>
+              {dateLabel(reorder.orderByIso, farm.timezone)}
+            </div>
           </div>
           <div>
-            <p className="text-xs text-muted">Earliest to latest</p>
-            <p className="machine mt-1 text-sm text-hay">
+            <div className={styles.panelK}>Earliest to latest</div>
+            <div className={`${styles.panelV} ${styles.projected}`} style={{ fontSize: 15 }}>
               {reorder.orderByEarliestIso === null
                 ? '—'
                 : `${dateLabel(reorder.orderByEarliestIso, farm.timezone)} – ${dateLabel(reorder.orderByLatestIso, farm.timezone)}`}
-            </p>
+            </div>
           </div>
           <div>
-            <p className="text-xs text-muted">Runs out</p>
-            <p className="machine mt-1 text-sm text-hay">
+            <div className={styles.panelK}>Runs out</div>
+            <div className={`${styles.panelV} ${styles.projected}`} style={{ fontSize: 15 }}>
               {dateLabel(reorder.runOutAtIso, farm.timezone)}
-            </p>
+            </div>
           </div>
         </div>
-
-        <Why
-          confidence={reorder.confidence}
-          confidenceReasons={reorder.confidenceReasons}
-          assumptions={[
-            ...reorder.assumptions,
-            DEFAULT_ASSUMPTIONS['leadTime'] as Assumption,
-            DEFAULT_ASSUMPTIONS['safetyStock'] as Assumption,
-          ]}
-          extra={
-            <InputTable
-              rows={[
-                { label: 'Days on hand it was given', value: days(leading.days) },
-                { label: 'Lead time', value: `${DEFAULT_LEAD_TIME_DAYS} days` },
-                { label: 'Safety stock', value: `${DEFAULT_SAFETY_STOCK_DAYS} days` },
-              ]}
-            />
-          }
-        />
-      </section>
+      </Card>
 
       {/* ── Consumption rate per pen ─────────────────────────── */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-base font-medium">Consumption rate by pen</h2>
-          <p className="machine text-xs text-muted">measured</p>
-        </div>
-        <p className="mb-4 max-w-3xl text-xs text-faint">
-          Feed delivered comes from what was logged. Bunk drawdown is fitted only across the
-          stretches between feedings — a straight line through the whole sawtooth would measure
-          eating minus refilling, which is close to nothing. Drawdown is bunk depth, not weight:
-          turning depth into pounds needs each sensor&rsquo;s calibration curve.
-        </p>
-
+      <Card title="Consumption rate by pen" sub="measured" padded={penRows.length === 0}>
         {penRows.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-hairline text-xs text-muted">
-                  <th className="py-2 pr-4 font-normal">Pen</th>
-                  <th className="py-2 pr-4 font-normal">Head</th>
-                  <th className="py-2 pr-4 font-normal">Fed per day</th>
-                  <th className="py-2 pr-4 font-normal">Per head</th>
-                  <th className="py-2 pr-4 font-normal">Bunk drawdown</th>
-                  <th className="py-2 font-normal">Fit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {penRows.map((row) => (
-                  <tr key={row.penId} className="border-b border-hairline/50">
-                    <td className="py-2 pr-4 text-foreground">{featureName(row.penId)}</td>
-                    <td className="machine py-2 pr-4 text-xs">
-                      {row.head === null ? '—' : row.head.toLocaleString('en-US')}
-                    </td>
-                    <td className="machine py-2 pr-4 text-xs">{lbPerDay(row.penRate.kgPerDay)}</td>
-                    <td className="machine py-2 pr-4 text-xs">
-                      {row.head !== null && row.head > 0 && row.penRate.kgPerDay !== null
-                        ? lbPerDay(row.penRate.kgPerDay / row.head)
-                        : '—'}
-                    </td>
-                    <td className="machine py-2 pr-4 text-xs">
-                      {row.drawdown?.ratePerDay != null
-                        ? `${formatMeasure(row.drawdown.ratePerDay, 'mm')}/day`
-                        : '—'}
-                    </td>
-                    <td className="py-2 text-xs text-faint">
-                      {row.drawdown === null
-                        ? 'no bunk sensor'
-                        : `${row.drawdown.legsUsed} stretches · ${row.drawdown.refillsDetected} refills`}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
+          <>
+            <div className="ow-bd" style={{ paddingBottom: 0 }}>
+              <p className={styles.prose}>
+                Feed delivered comes from what was logged. Bunk drawdown is fitted only across the
+                stretches between feedings — a straight line through the whole sawtooth would
+                measure eating minus refilling, which is close to nothing. Drawdown is bunk depth,
+                not weight: turning depth into pounds needs each sensor&rsquo;s calibration curve.
+              </p>
+            </div>
+            <DataTable
+              caption="Feeding rate and bunk drawdown, by pen"
+              columns={penColumns}
+              rows={penRows}
+              rowKey={(r) => r.penId}
+            />
             {penRows
               .filter((r) => r.drawdown !== null)
               .map((row) => (
-                <Why
-                  key={row.penId}
-                  label={`Why the drawdown at ${featureName(row.penId)}`}
-                  confidence={row.drawdown?.confidence ?? 'none'}
-                  confidenceReasons={row.drawdown?.confidenceReasons ?? []}
-                  assumptions={row.drawdown?.assumptions ?? []}
-                  extra={
-                    <InputTable
-                      rows={[
-                        { label: 'Readings supplied', value: String(row.drawdown?.inputs.pointsSupplied ?? 0) },
-                        { label: 'Readings fitted', value: String(row.drawdown?.pointsUsed ?? 0) },
-                        { label: 'Readings set aside', value: String(row.drawdown?.pointsDiscarded ?? 0) },
-                        { label: 'Stretches between refills', value: String(row.drawdown?.legsUsed ?? 0) },
-                        { label: 'Gaps in the record', value: String(row.drawdown?.gapsDetected ?? 0) },
-                        { label: 'Sensors feeding this pen', value: String(row.sensorCount) },
-                        {
-                          label: 'Rate range',
-                          value:
-                            row.drawdown?.rateLowPerDay != null && row.drawdown.rateHighPerDay != null
-                              ? `${formatMeasure(row.drawdown.rateLowPerDay, 'mm')} – ${formatMeasure(row.drawdown.rateHighPerDay, 'mm')} per day`
-                              : null,
-                        },
-                      ]}
-                    />
-                  }
-                />
+                <div key={row.penId} className="ow-note">
+                  <Why
+                    label={`Why the drawdown at ${featureName(row.penId)}`}
+                    confidence={row.drawdown?.confidence ?? 'none'}
+                    confidenceReasons={row.drawdown?.confidenceReasons ?? []}
+                    assumptions={row.drawdown?.assumptions ?? []}
+                    extra={
+                      <InputTable
+                        rows={[
+                          { label: 'Readings supplied', value: String(row.drawdown?.inputs.pointsSupplied ?? 0) },
+                          { label: 'Readings fitted', value: String(row.drawdown?.pointsUsed ?? 0) },
+                          { label: 'Readings set aside', value: String(row.drawdown?.pointsDiscarded ?? 0) },
+                          { label: 'Stretches between refills', value: String(row.drawdown?.legsUsed ?? 0) },
+                          { label: 'Gaps in the record', value: String(row.drawdown?.gapsDetected ?? 0) },
+                          { label: 'Sensors feeding this pen', value: String(row.sensorCount) },
+                          {
+                            label: 'Rate range',
+                            value:
+                              row.drawdown?.rateLowPerDay != null && row.drawdown.rateHighPerDay != null
+                                ? `${formatMeasure(row.drawdown.rateLowPerDay, 'mm')} – ${formatMeasure(row.drawdown.rateHighPerDay, 'mm')} per day`
+                                : null,
+                          },
+                        ]}
+                      />
+                    }
+                  />
+                </div>
               ))}
-          </div>
+          </>
         ) : (
-          <p className="text-sm text-muted">
+          <p className={styles.hint}>
             No feeding has been logged in the last {WINDOW_DAYS} days, so there is no rate to
             report.
           </p>
         )}
-      </section>
+      </Card>
 
       {/* ── Intake anomalies ─────────────────────────────────── */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <h2 className="mb-4 text-base font-medium">Intake worth a second look</h2>
+      <Card title="Intake worth a second look">
         {anomalies.length > 0 ? (
-          <ul className="space-y-4">
+          <ul className={styles.anomalies}>
             {anomalies.map(({ penId, result }) => (
               <li key={penId}>
-                <p className="text-sm text-foreground">
+                <p className={styles.anomaly}>
                   {featureName(penId)} has come in under its own norm for{' '}
                   <Measured>{result.streak}</Measured>{' '}
                   {result.streak === 1 ? 'day' : 'days running'}.
                 </p>
-                <Why
-                  label={`Why ${featureName(penId)} is flagged`}
-                  confidence={result.confidence}
-                  confidenceReasons={result.confidenceReasons}
-                  assumptions={result.assumptions}
-                  extra={
-                    <InputTable
-                      rows={[
-                        {
-                          label: 'Latest day',
-                          value:
-                            result.latest === null ? null : formatMeasure(result.latest.intakeKg, 'kg'),
-                        },
-                        {
-                          label: 'Its own norm',
-                          value:
-                            result.latest?.baselineMean == null
-                              ? null
-                              : formatMeasure(result.latest.baselineMean, 'kg'),
-                        },
-                        {
-                          label: 'How far off, in standard deviations',
-                          value: result.latest?.z == null ? null : result.latest.z.toFixed(2),
-                        },
-                        {
-                          label: 'Days of baseline used',
-                          value: String(result.latest?.baselineSamples ?? 0),
-                        },
-                      ]}
-                    />
-                  }
-                />
+                <div className={styles.whyInline}>
+                  <Why
+                    label={`Why ${featureName(penId)} is flagged`}
+                    confidence={result.confidence}
+                    confidenceReasons={result.confidenceReasons}
+                    assumptions={result.assumptions}
+                    extra={
+                      <InputTable
+                        rows={[
+                          {
+                            label: 'Latest day',
+                            value:
+                              result.latest === null ? null : formatMeasure(result.latest.intakeKg, 'kg'),
+                          },
+                          {
+                            label: 'Its own norm',
+                            value:
+                              result.latest?.baselineMean == null
+                                ? null
+                                : formatMeasure(result.latest.baselineMean, 'kg'),
+                          },
+                          {
+                            label: 'How far off, in standard deviations',
+                            value: result.latest?.z == null ? null : result.latest.z.toFixed(2),
+                          },
+                          {
+                            label: 'Days of baseline used',
+                            value: String(result.latest?.baselineSamples ?? 0),
+                          },
+                        ]}
+                      />
+                    }
+                  />
+                </div>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-sm text-muted">
+          <p className={styles.hint}>
             Nothing is eating far enough off its own two-week norm to be worth flagging.
           </p>
         )}
-      </section>
+      </Card>
 
       {/* ── Cost ─────────────────────────────────────────────── */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-base font-medium">Cost per head per day</h2>
-          <ConfidenceChip confidence={costRollup.confidence} />
-        </div>
-
+      <Card
+        title="Cost per head per day"
+        aside={<ConfidenceChip confidence={costRollup.confidence} />}
+        padded={price === null || costRollup.buckets.length === 0}
+        note={
+          <Why
+            confidence={costRollup.confidence}
+            confidenceReasons={costRollup.confidenceReasons}
+            assumptions={[
+              ...costRollup.assumptions,
+              {
+                key: 'blended_price',
+                label: 'One price per ton, blended across the priced stacks by weight on hand',
+                value: price === null ? null : Math.round(price.unitCostPerTon),
+                source: 'derived',
+                detail:
+                  'A farm feeds out of several stacks at once and the cost calculation takes one price. ' +
+                  'Weighting by weight keeps a half ton of straw from counting as hard as forty ton of alfalfa.',
+              },
+            ]}
+            extra={
+              <InputTable
+                rows={[
+                  {
+                    label: 'Blended price',
+                    value: price === null ? null : `${money(price.unitCostPerTon, 0)}/ton`,
+                  },
+                  {
+                    label: 'Weight the blend covers',
+                    value: price === null ? null : formatMeasure(price.pricedMassKg, 'kg_ton'),
+                  },
+                  {
+                    label: 'Stacks with no price on them',
+                    value: price === null || price.unpricedLots === 0 ? null : String(price.unpricedLots),
+                  },
+                  { label: 'Pens counted', value: String(costRollup.inputs.unitsIncluded) },
+                  {
+                    label: 'Pens left out',
+                    value:
+                      costRollup.inputs.unitsInvalid + costRollup.inputs.unitsUnkeyed === 0
+                        ? null
+                        : String(costRollup.inputs.unitsInvalid + costRollup.inputs.unitsUnkeyed),
+                  },
+                ]}
+              />
+            }
+          />
+        }
+      >
         {price === null ? (
-          <p className="text-sm text-muted">
+          <p className={styles.hint}>
             None of the hay on hand has a price on it, so there is no cost to report. Add a price
             to a stack and this fills in.
           </p>
         ) : costRollup.buckets.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-hairline text-xs text-muted">
-                  <th className="py-2 pr-4 font-normal">Pen</th>
-                  <th className="py-2 pr-4 font-normal">Head</th>
-                  <th className="py-2 pr-4 font-normal">Fed per day</th>
-                  <th className="py-2 pr-4 font-normal">Cost per day</th>
-                  <th className="py-2 font-normal">Per head per day</th>
-                </tr>
-              </thead>
-              <tbody>
-                {costRollup.buckets.map((bucket) => (
-                  <tr key={bucket.key} className="border-b border-hairline/50">
-                    <td className="py-2 pr-4 text-foreground">{featureName(bucket.key)}</td>
-                    <td className="machine py-2 pr-4 text-xs">
-                      {bucket.headCount.toLocaleString('en-US')}
-                    </td>
-                    <td className="machine py-2 pr-4 text-xs">{lbPerDay(bucket.feedKgPerDay)}</td>
-                    <td className="py-2 pr-4 text-xs">
-                      <Projected>{money(bucket.costPerDay)}</Projected>
-                    </td>
-                    <td className="py-2 text-xs">
-                      <Projected>{money(bucket.costPerHeadPerDay)}</Projected>
-                    </td>
-                  </tr>
-                ))}
-                <tr className="border-b border-hairline">
-                  <td className="py-2 pr-4 text-foreground">All pens</td>
-                  <td className="machine py-2 pr-4 text-xs">
-                    {costRollup.total.headCount.toLocaleString('en-US')}
-                  </td>
-                  <td className="machine py-2 pr-4 text-xs">
-                    {lbPerDay(costRollup.total.feedKgPerDay)}
-                  </td>
-                  <td className="py-2 pr-4 text-xs">
-                    <Projected>{money(costRollup.total.costPerDay)}</Projected>
-                  </td>
-                  <td className="py-2 text-xs">
-                    <Projected>{money(costRollup.total.costPerHeadPerDay)}</Projected>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            caption="Feed cost per head per day, by pen"
+            columns={costColumns}
+            rows={costRows}
+            rowKey={(r) => r.key}
+            rowClassName={(r) => (r.isTotal ? styles.totalRow : undefined)}
+          />
         ) : (
-          <p className="text-sm text-muted">
+          <p className={styles.hint}>
             No pen has both a head count and logged feeding, so cost per head would be a guess.
           </p>
         )}
-
-        <Why
-          confidence={costRollup.confidence}
-          confidenceReasons={costRollup.confidenceReasons}
-          assumptions={[
-            ...costRollup.assumptions,
-            {
-              key: 'blended_price',
-              label: 'One price per ton, blended across the priced stacks by weight on hand',
-              value: price === null ? null : Math.round(price.unitCostPerTon),
-              source: 'derived',
-              detail:
-                'A farm feeds out of several stacks at once and the cost calculation takes one price. ' +
-                'Weighting by weight keeps a half ton of straw from counting as hard as forty ton of alfalfa.',
-            },
-          ]}
-          extra={
-            <InputTable
-              rows={[
-                {
-                  label: 'Blended price',
-                  value: price === null ? null : `${money(price.unitCostPerTon, 0)}/ton`,
-                },
-                {
-                  label: 'Weight the blend covers',
-                  value: price === null ? null : formatMeasure(price.pricedMassKg, 'kg_ton'),
-                },
-                {
-                  label: 'Stacks with no price on them',
-                  value: price === null || price.unpricedLots === 0 ? null : String(price.unpricedLots),
-                },
-                { label: 'Pens counted', value: String(costRollup.inputs.unitsIncluded) },
-                {
-                  label: 'Pens left out',
-                  value:
-                    costRollup.inputs.unitsInvalid + costRollup.inputs.unitsUnkeyed === 0
-                      ? null
-                      : String(costRollup.inputs.unitsInvalid + costRollup.inputs.unitsUnkeyed),
-                },
-              ]}
-            />
-          }
-        />
-      </section>
+      </Card>
 
       {/* ── The stack, lot by lot ────────────────────────────── */}
-      <section className="rounded-lg border border-hairline bg-card p-6">
-        <h2 className="mb-1 text-base font-medium">What the stack is made of</h2>
-        <p className="mb-4 max-w-3xl text-xs text-faint">
-          The total above averages these together. One stack of weighed rounds and one of assumed
-          small squares average to a figure that describes neither, so they stay listed.
-        </p>
-
-        {lines.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-hairline text-xs text-muted">
-                  <th className="py-2 pr-4 font-normal">Feed</th>
-                  <th className="py-2 pr-4 font-normal">Bales</th>
-                  <th className="py-2 pr-4 font-normal">Bale weight</th>
-                  <th className="py-2 pr-4 font-normal">Weighed here?</th>
-                  <th className="py-2 pr-4 font-normal">Dry matter</th>
-                  <th className="py-2 font-normal">On hand</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((line) => (
-                  <tr key={line.id} className="border-b border-hairline/50">
-                    <td className="py-2 pr-4 text-foreground">
-                      {line.feedType}
-                      {line.cutting !== null && (
-                        <span className="machine text-xs text-faint"> · cut {line.cutting}</span>
-                      )}
-                      {line.baleLabel !== null && (
-                        <span className="machine text-xs text-faint"> · {line.baleLabel}</span>
-                      )}
-                    </td>
-                    <td className="machine py-2 pr-4 text-xs">
-                      {line.baleCount.toLocaleString('en-US')}
-                    </td>
-                    <td className="machine py-2 pr-4 text-xs">
-                      {line.baleWeight === null
-                        ? '—'
-                        : formatMeasure(line.baleWeight.weightKg, 'kg')}
-                    </td>
-                    <td className="py-2 pr-4 text-xs">
-                      {line.baleWeight === null ? (
-                        <span className="text-faint">no bale type set</span>
-                      ) : line.baleWeight.provenance === 'measured' ? (
-                        <span className="text-accent">weighed</span>
-                      ) : (
-                        <span className="text-muted">book figure</span>
-                      )}
-                    </td>
-                    <td className="machine py-2 pr-4 text-xs">
-                      {line.dryMatterPct.toFixed(1)}%
-                    </td>
-                    <td className="machine py-2 text-xs">
-                      {line.onHandKg === null ? '—' : formatMeasure(line.onHandKg, 'kg_ton')}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="mt-3 text-xs text-faint">
+      <Card
+        title="What the stack is made of"
+        padded={lines.length === 0}
+        note={
+          lines.length > 0 ? (
+            <>
               A weighed bale beats a book bale every time — real bale weight moves with crop,
               moisture, and baler tension, and the difference compounds straight into days on
               hand. Weigh a few and the whole page gets sharper.
-            </p>
-          </div>
+            </>
+          ) : undefined
+        }
+      >
+        {lines.length > 0 ? (
+          <>
+            <div className="ow-bd" style={{ paddingBottom: 0 }}>
+              <p className={styles.prose}>
+                The total above averages these together. One stack of weighed rounds and one of
+                assumed small squares average to a figure that describes neither, so they stay
+                listed.
+              </p>
+            </div>
+            <DataTable
+              caption="The stack, lot by lot"
+              columns={stackColumns}
+              rows={lines}
+              rowKey={(l) => l.id}
+            />
+          </>
         ) : (
-          <p className="text-sm text-muted">
+          <p className={styles.hint}>
             No hay stacks are recorded yet, so there is nothing to project from.
           </p>
         )}
-      </section>
+      </Card>
 
-      <p className="text-xs text-faint">
-        Feed getting short opens an alert on its own.{' '}
-        <Link
-          href="/alerts"
-          className="text-accent underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-        >
-          See what is open
-        </Link>
-        .
+      <p className={styles.foot}>
+        Feed getting short opens an alert on its own. <Link href="/alerts">See what is open</Link>.
       </p>
-    </div>
+    </Pad>
   );
 }
