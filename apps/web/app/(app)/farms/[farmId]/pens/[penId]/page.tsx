@@ -22,6 +22,7 @@ import {
   DataTable,
   Kpi,
   KpiGrid,
+  LinkButton,
   Pad,
   PageHeader,
   formatMeasure,
@@ -274,11 +275,24 @@ export default async function PenPage({
         <Card
           title="Gate activity"
           sub="last 14 days"
+          /* Movement is not one of the bar's four tabs, so the screen that
+             shows gate swings is the place to reach the screen that shows
+             all of them — inferred feed runs and pasture rotation included.
+             See the note in ../../movement/page.tsx. */
+          aside={
+            <LinkButton size="sm" href={`/farms/${farmId}/movement`}>
+              Open movement
+            </LinkButton>
+          }
           padded={false}
           note={
-            gates.scoped
-              ? 'Gates the map links to this pen.'
-              : 'No gate is linked to this pen on the map yet, so this is recent gate activity across the farm — not attributed to this pen.'
+            <>
+              {gates.scoped
+                ? 'Gates the map links to this pen.'
+                : 'No gate is linked to this pen on the map yet, so this is recent gate activity across the farm — not attributed to this pen.'}{' '}
+              Movement has every gate swing on the farm, the feed runs inferred from them, and
+              this pen&rsquo;s rotation history.
+            </>
           }
         >
           {gates.events.length > 0 ? (

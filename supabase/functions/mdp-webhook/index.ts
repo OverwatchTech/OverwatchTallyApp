@@ -2,10 +2,20 @@
 //
 // service_role is permitted here (one of exactly two places — CLAUDE.md #9).
 //
+// AUTHENTICATION (changed by migration 0022 — read this before editing):
+// the request URL is ROUTING, never a credential. The only authenticator is
+// the MDP signature — four request headers, none of which appear in a URL and
+// therefore none of which appear in Supabase's platform log line. The old
+// per-farm path token was in that log line on every single invocation, which
+// made log access equivalent to endpoint access; it is now ignored for
+// authorisation and kept only so already-configured callback URIs keep
+// routing. Full reasoning in README "Why the token left the URL".
+//
 // ARCHITECTURE §5 requirements → where they live:
-//   1  no-signature compensations   tokenFromPath + TOKEN_SHAPE, limiter,
-//                                   validate-before-DB, unknown-devEUI drop,
-//                                   reason-code logging (no request echo)
+//   1  compensating controls        signature gate (authenticate), limiter
+//                                   keyed on the webhook UUID, validate-
+//                                   before-DB, unknown-devEUI drop, reason-
+//                                   code logging (no request echo)
 //   2  idempotent on eventID        ingest_event_ids gate, ON CONFLICT DO
 //                                   NOTHING; conflict ⇒ replay ⇒ 200
 //   3  raw before normalize         raw_events insert precedes (and gates)
@@ -23,9 +33,14 @@
 //                                   MilesightMdpSource is implementation #1
 //
 // Response contract (bodies are ALWAYS empty — never echo request contents):
-//   200 accepted (or replay)   404 unknown/ill-shaped token or path
+//   200 accepted (or replay)   401 not authenticated (see below)
 //   400 malformed envelope     405 not POST          413 body too large
 //   429 rate limited           500 raw persist failed (MDP should retry)
+//
+// EVERY authentication failure is an indistinguishable 401 — missing headers,
+// unknown webhook UUID, stale timestamp, bad MAC. The endpoint used to answer
+// 404 for an unknown token and 401 for a bad signature, which made it an
+// oracle for "is this farm real". There is no 404 any more.
 
 import { MilesightMdpSource, type ParsedIngest, type TelemetrySource } from './source.ts';
 import { envelopeBatch, type MdpEnvelope } from './validate.ts';
@@ -41,9 +56,15 @@ const RATE_WINDOW_MS = 60_000;
 // 60 sensors at 10-minute intervals ≈ 6 events/min/farm; 300/min absorbs
 // Debug Panel batches and gateway backlog flushes with a wide margin.
 const RATE_MAX_PER_WINDOW = 300;
-// farms.webhook_token default is 48 hex chars (gen_random_bytes(24));
-// the range tolerates future rotation to other lengths.
-const TOKEN_SHAPE = /^[0-9a-f]{32,64}$/i;
+// Freshness window on x-msc-request-timestamp. Applied twice: once cheaply
+// before any I/O, and again inside verifySignature so the check cannot be
+// bypassed by a future caller of that function.
+const SIGNATURE_SKEW_SECONDS = 300;
+// farms.webhook_token default is 48 hex chars (gen_random_bytes(24)).
+// LEGACY: this shape is used only to recognise an old-style callback URI so
+// the request can still be routed and the operator warned. It authenticates
+// nothing (migration 0022).
+const LEGACY_TOKEN_SHAPE = /^[0-9a-f]{32,64}$/i;
 
 // Requires `alter type alert_kind_t add value 'mdp_system_messages';` before
 // deploy (migration lands outside this phase branch — see README). Until it
@@ -62,12 +83,18 @@ const counters = {
   accepted: 0,
   replays: 0,
   rejectedEnvelope: 0,
-  unknownToken: 0,
+  unknownWebhookUuid: 0,
   unknownDevEui: 0,
   rateLimited: 0,
   deadLettered: 0,
   badSignature: 0,
+  legacyUrl: 0,
 };
+
+// Farms whose callback URI still carries the legacy token. Warned once per
+// isolate per farm — the condition is per-configuration, not per-request, and
+// at 4,000 events/min a per-request line would bury everything else.
+const legacyUrlWarned = new Set<string>();
 
 let client: PostgrestClient | null = null;
 function pg(): PostgrestClient {
@@ -96,25 +123,36 @@ function log(entry: Record<string, unknown>): void {
   console.log(JSON.stringify({ ts: new Date().toISOString(), fn: 'mdp-webhook', ...entry }));
 }
 
-/** Tokens are secrets — logs get a 6-char correlation prefix, nothing more. */
-function tokenPrefix(token: string): string {
-  return `${token.slice(0, 6)}…`;
+/**
+ * Correlation prefix for values that must not appear in a log in full.
+ *
+ * The webhook UUID is not the secret — the HMAC key is — but it IS the routing
+ * key and the rate-limiter key, so publishing it in full would hand an
+ * attacker with log access the ability to exhaust one farm's ingest budget.
+ * That is precisely the class of bug this change exists to remove, so the
+ * UUID gets the same treatment the token always had.
+ */
+function redact(value: string): string {
+  return `${value.slice(0, 6)}…`;
 }
 
 /**
- * Extract the farm token: the path is /mdp-webhook/{farm_token} (§5.1), which
- * the platform may present as /{token}, /mdp-webhook/{token}, or
- * /functions/v1/mdp-webhook/{token} depending on how it is fronted. The token
- * must be the FINAL segment, and must look like one before it is allowed
- * anywhere near a query filter.
+ * Recognise a LEGACY callback URI of the form /mdp-webhook/{farm_token},
+ * which the platform may present as /{token}, /mdp-webhook/{token}, or
+ * /functions/v1/mdp-webhook/{token} depending on how it is fronted.
+ *
+ * This is no longer authentication (migration 0022). The canonical callback
+ * URI has no trailing segment and this returns null for it. The value is used
+ * for exactly one thing: telling an operator that a console entry is stale or
+ * points at the wrong farm.
  */
-function tokenFromPath(pathname: string): string | null {
+function legacyTokenFromPath(pathname: string): string | null {
   const segs = pathname.split('/').filter((s) => s.length > 0);
   let candidate: string | undefined;
   const fnIdx = segs.lastIndexOf('mdp-webhook');
   if (fnIdx >= 0 && fnIdx === segs.length - 2) candidate = segs[segs.length - 1];
   else if (segs.length === 1) candidate = segs[0];
-  if (candidate === undefined || !TOKEN_SHAPE.test(candidate)) return null;
+  if (candidate === undefined || !LEGACY_TOKEN_SHAPE.test(candidate)) return null;
   return candidate;
 }
 
@@ -139,32 +177,52 @@ function scheduleBackground(work: Promise<void>): void {
 async function handleRequest(req: Request): Promise<Response> {
   // MDP validates a callback URI with a non-POST preflight before it will
   // accept it — its Test button reports "the callback URI is invalid" when we
-  // answer 405. Ack liveness probes with an empty 200 WITHOUT looking the
-  // token up: an unconditional ack leaks nothing, where a token-dependent
-  // answer would make the endpoint a token oracle.
+  // answer 405. Ack liveness probes with an unconditional empty 200: a probe
+  // carries no signature, and an answer that varied by farm would make the
+  // endpoint an oracle for which callback URIs are real.
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
     return empty(200);
   }
   if (req.method !== 'POST') return empty(405);
 
-  const token = tokenFromPath(new URL(req.url).pathname);
-  if (token === null) {
-    // Indistinguishable from an unknown token on purpose.
-    log({ evt: 'reject', reason: 'bad_path_or_token_shape' });
-    return empty(404);
+  // ── authenticate ──────────────────────────────────────────────────────────
+  // Headers only. Nothing in the URL is trusted; the path token that used to
+  // live here is read further down for a misconfiguration warning and has no
+  // say in whether this request is allowed (migration 0022).
+  const material = signatureMaterial(req.headers);
+  if (material === null) {
+    counters.badSignature += 1;
+    log({ evt: 'reject', reason: 'signature_headers_missing' });
+    return empty(401);
   }
 
-  // Rate limit before any parsing or DB work — unknown tokens are limited
-  // too, so token scanning cannot farm DB lookups (§5.1).
-  if (!limiter.allow(token)) {
+  // Freshness first: rejecting a replayed or clock-skewed header set costs one
+  // integer comparison, so it happens before the limiter, the body read, and
+  // certainly before any HMAC work. verifySignature re-checks it — this is an
+  // early exit, not the authority.
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (Math.abs(nowSeconds - Number(material.timestamp)) > SIGNATURE_SKEW_SECONDS) {
+    counters.badSignature += 1;
+    log({ evt: 'reject', reason: 'stale_timestamp', webhookUuid: redact(material.uuid) });
+    return empty(401);
+  }
+
+  // Rate limit keyed on the webhook UUID. This used to be keyed on the path
+  // token — which the platform log printed in full on every invocation, so
+  // anyone with log access could flood one farm's bucket, drive MDP into
+  // retry-then-SYSTEM_MESSAGES, and destroy telemetry inside MDP's one-day
+  // retention window without ever holding a credential. The UUID is a header;
+  // it is never in a URL and never in a platform log line.
+  const uuid = material.uuid.toLowerCase();
+  if (!limiter.allow(uuid)) {
     counters.rateLimited += 1;
-    log({ evt: 'reject', reason: 'rate_limited', token: tokenPrefix(token), total: counters.rateLimited });
+    log({ evt: 'reject', reason: 'rate_limited', webhookUuid: redact(uuid), total: counters.rateLimited });
     return empty(429);
   }
 
   const text = await req.text();
   if (text.length > MAX_BODY_BYTES) {
-    log({ evt: 'reject', reason: 'body_too_large', token: tokenPrefix(token), bytes: text.length });
+    log({ evt: 'reject', reason: 'body_too_large', webhookUuid: redact(uuid), bytes: text.length });
     return empty(413);
   }
 
@@ -173,7 +231,7 @@ async function handleRequest(req: Request): Promise<Response> {
     body = JSON.parse(text);
   } catch {
     counters.rejectedEnvelope += 1;
-    log({ evt: 'reject', reason: 'body_not_json', token: tokenPrefix(token) });
+    log({ evt: 'reject', reason: 'body_not_json', webhookUuid: redact(uuid) });
     return empty(400);
   }
 
@@ -183,12 +241,13 @@ async function handleRequest(req: Request): Promise<Response> {
   const batch = envelopeBatch(body);
   if (batch === null) {
     counters.rejectedEnvelope += 1;
-    log({ evt: 'reject', reason: 'empty_batch', token: tokenPrefix(token) });
+    log({ evt: 'reject', reason: 'empty_batch', webhookUuid: redact(uuid) });
     return empty(400);
   }
 
-  // §5.1 ordering guarantee: envelope shape is validated BEFORE the first
-  // database touch (the farm lookup below).
+  // §5.1 ordering guarantee, preserved: envelope shape is validated BEFORE the
+  // first database touch (the credential lookup below). Auth is header-only up
+  // to this point, so nothing that reaches the database is attacker-shaped.
   const parsed: ParsedIngest<MdpEnvelope>[] = [];
   for (const item of batch) {
     const result = source.parse(item);
@@ -196,55 +255,75 @@ async function handleRequest(req: Request): Promise<Response> {
       parsed.push(result.parsed);
     } else {
       counters.rejectedEnvelope += 1;
-      log({ evt: 'reject', reason: result.reason, source: source.name, token: tokenPrefix(token) });
+      log({ evt: 'reject', reason: result.reason, source: source.name, webhookUuid: redact(uuid) });
     }
   }
   if (parsed.length === 0) return empty(400);
 
-  // Resolve the farm by its webhook token. No status gating: ingest continues
-  // even for past-due/canceled farms — never drop data over a card
-  // (ARCHITECTURE §10).
-  const farm = await pg().selectOne<{ id: string; org_id: string }>('farms', {
-    select: 'id,org_id',
-    webhook_token: `eq.${token}`,
-  });
-  if (farm === null) {
-    counters.unknownToken += 1;
-    log({ evt: 'reject', reason: 'unknown_token', token: tokenPrefix(token), total: counters.unknownToken });
-    return empty(404);
-  }
-
-  // Signature verification (see signature.ts). MDP signs every delivery; the
-  // path token stays as defence in depth. A farm with no stored credentials
-  // yet is accepted unsigned and logged loudly — provisioning writes the
-  // secret, and refusing data before that would drop real readings on the
-  // floor during install.
-  const material = signatureMaterial(req.headers);
-  const creds = await pg().selectOne<{ webhook_secret: string; webhook_uuid: string }>(
+  // Resolve the FARM from the SIGNING IDENTITY. The webhook UUID selects the
+  // Application, one Application belongs to one farm (ARCHITECTURE §3), and
+  // `mdp_webhook_credentials.webhook_uuid` is unique — so this lookup is the
+  // whole of routing. Migration 0022 constrains the stored value to canonical
+  // lowercase so this exact match cannot fail on a paste artefact.
+  //
+  // No row ⇒ 401, never 404: an unknown UUID and a bad MAC must be
+  // indistinguishable from outside. A farm with no credentials stored simply
+  // cannot ingest — that fallback WAS the log-exposure hole (see 0022).
+  const creds = await pg().selectOne<{ farm_id: string; webhook_secret: string }>(
     'mdp_webhook_credentials',
-    { select: 'webhook_secret,webhook_uuid', farm_id: `eq.${farm.id}` },
+    { select: 'farm_id,webhook_secret', webhook_uuid: `eq.${uuid}` },
   );
   if (creds === null) {
-    log({ evt: 'signature_skipped', reason: 'no_credentials_stored', farmId: farm.id });
-  } else if (material === null) {
-    counters.badSignature += 1;
-    log({ evt: 'reject', reason: 'signature_headers_missing', farmId: farm.id });
+    counters.unknownWebhookUuid += 1;
+    log({
+      evt: 'reject',
+      reason: 'unknown_webhook_uuid',
+      webhookUuid: redact(uuid),
+      total: counters.unknownWebhookUuid,
+    });
     return empty(401);
-  } else if (material.uuid !== creds.webhook_uuid) {
+  }
+
+  const verdict = await verifySignature(
+    material,
+    creds.webhook_secret,
+    nowSeconds,
+    SIGNATURE_SKEW_SECONDS,
+  );
+  if (!verdict.ok) {
     counters.badSignature += 1;
-    log({ evt: 'reject', reason: 'webhook_uuid_mismatch', farmId: farm.id });
+    log({ evt: 'reject', reason: verdict.reason, farmId: creds.farm_id });
     return empty(401);
-  } else {
-    const verdict = await verifySignature(
-      material,
-      creds.webhook_secret,
-      Math.floor(Date.now() / 1000),
-    );
-    if (!verdict.ok) {
-      counters.badSignature += 1;
-      log({ evt: 'reject', reason: verdict.reason, farmId: farm.id });
-      return empty(401);
-    }
+  }
+
+  // Authenticated from here down.
+  //
+  // No status gating: ingest continues even for past-due/canceled farms —
+  // never drop data over a card (ARCHITECTURE §10).
+  const farm = await pg().selectOne<{ id: string; org_id: string; webhook_token: string }>('farms', {
+    select: 'id,org_id,webhook_token',
+    id: `eq.${creds.farm_id}`,
+  });
+  if (farm === null) {
+    // mdp_webhook_credentials.farm_id is a FK with ON DELETE CASCADE, so this
+    // is unreachable short of a torn write. 500, not 401 — it is our fault and
+    // MDP should retry.
+    log({ evt: 'farm_missing_for_credentials', farmId: creds.farm_id });
+    return empty(500);
+  }
+
+  // The legacy path token, used for the one thing it is still good for.
+  const legacyToken = legacyTokenFromPath(new URL(req.url).pathname);
+  if (legacyToken !== null && !legacyUrlWarned.has(farm.id)) {
+    legacyUrlWarned.add(farm.id);
+    counters.legacyUrl += 1;
+    log({
+      evt: legacyToken === farm.webhook_token ? 'legacy_token_url' : 'legacy_token_url_mismatch',
+      farmId: farm.id,
+      note: 'Callback URI in the MDP console still carries a path token. It is ignored for '
+        + 'authorisation, but the platform log prints it in full — re-point the callback at the '
+        + 'tokenless URI shown in /admin/farms/<id>.',
+    });
   }
 
   // §5.6 — received_at is minted server-side, once, at receipt; every row
@@ -443,8 +522,18 @@ async function normalizeDeviceData(ctx: ProcessCtx): Promise<void> {
       })),
     );
   } else {
-    // ONLINE/OFFLINE — sensor-silent detection for free (§4.2); feeds the
-    // Phase 6 alert engine straight from device_health.
+    // ONLINE/OFFLINE — MDP's own claim about this sensor. It is ONE of the
+    // alert engine's inputs, not the only one: `sensor_offline` also fires on
+    // silence measured from OUR last persisted reading, so an MDP that stops
+    // delivering entirely cannot hide an outage (migration 0021).
+    //
+    // `last_online_change_at` is written unconditionally here on purpose —
+    // making it conditional would mean reading the row first, a third
+    // round-trip per envelope against a round-trip-bound ingest budget. The
+    // rule ("only move it when `online` actually changed", and never rewind
+    // `last_seen_at`) is enforced by the `device_health_guard` BEFORE UPDATE
+    // trigger, migration 0021. See README, "What this function deliberately
+    // does NOT do".
     await pg().insert(
       'device_health',
       [{

@@ -69,13 +69,20 @@ Open **Edge Functions → mdp-webhook → Logs**
 
 Every line the function emits is one JSON object with `ts`, `fn`, and `evt`.
 
-> **The farm token is in these logs.** The function itself only ever logs a
-> 6-character prefix — but Supabase's platform log line for every invocation is
-> `POST | 200 | https://…/mdp-webhook/<the whole token>`. Anyone who can read
-> edge-function logs can read every farm's webhook token, which is the
-> endpoint's primary authentication (ARCHITECTURE §5.1). Treat log access as
-> equivalent to token access; do not paste log lines into tickets or chats.
-> Filed as a gap in §8.
+> **The farm token still appears in some of these log lines, and it no longer
+> matters.** Supabase's platform log line records the request URL, so a console
+> that has not been re-pointed yet produces
+> `POST | 200 | https://…/mdp-webhook/<the whole token>`. Until migration 0022
+> that token was the endpoint's primary authentication, which made log access
+> equivalent to endpoint access. **It is not authentication any more** — the MDP
+> signature headers are, and headers never appear in a URL. A re-pointed
+> console logs `POST | 200 | https://…/functions/v1/mdp-webhook`, with nothing
+> after it.
+>
+> Two things follow. You can now paste a log line into a ticket without handing
+> over a credential. And `legacy_token_url` in the function log is your
+> worklist: it names every farm whose MDP console still points at the old URI.
+> See §5.5.
 
 - **Log is empty / no invocations at all** → nothing is arriving. MDP is not
   sending, or is not reaching us. Go to §1.2.
@@ -98,7 +105,7 @@ unconditional empty **200** by design (MDP validates a callback URI with a
 non-POST preflight and rejects the URI if it gets a 405):
 
 ```
-curl -i https://lropxenygvybctvaspxm.supabase.co/functions/v1/mdp-webhook/anything
+curl -i https://lropxenygvybctvaspxm.supabase.co/functions/v1/mdp-webhook
 ```
 
 - **200** → the function is up and routable. The problem is upstream of us.
@@ -112,13 +119,20 @@ If we are up, walk upstream in the **MDP console** (Overwatch's enterprise
 account; the URL and credentials are in the owner's password manager — one
 MDP Application per farm, ARCHITECTURE §3):
 
-1. **Application → Webhook** — is the callback URI still configured, still
-   enabled, and does it still end in this farm's `webhook_token`? Compare
-   against:
+1. **Application → Webhook** — is the callback URI still configured and still
+   enabled? MDP disables a callback that fails repeatedly. The URI itself needs
+   no checking against anything: since migration 0022 it carries no per-farm
+   value, and both `…/functions/v1/mdp-webhook` and the old
+   `…/mdp-webhook/<token>` form route identically. What *does* need checking is
+   that we still hold this Application's signing material, because that is what
+   identifies the farm:
    ```sql
-   select id, name, webhook_token from farms where name = '<farm>';
+   select f.name, (c.farm_id is not null) as can_ingest, c.webhook_uuid, c.rotated_at
+     from farms f left join mdp_webhook_credentials c on c.farm_id = f.id
+    where f.name = '<farm>';
    ```
-   MDP disables a callback that fails repeatedly.
+   `can_ingest = false` means every delivery for that farm is being refused
+   with a 401. Go to §5.4.
 2. **Application → Data Preview** — is MDP itself receiving anything from the
    gateway? If Data Preview is empty, the problem is below MDP: gateway or
    radio. Go to §4.
@@ -158,22 +172,30 @@ it. **Never surface this to a customer** (CLAUDE.md #5).
 
 ## 2. Rejection reason codes
 
-Every refusal is one log line: `{"evt":"reject","reason":"…","token":"abc123…"}`.
-Tokens appear only as a 6-character prefix; envelope contents are never
-logged and never echoed in a response (bodies are always empty).
+Every refusal is one log line:
+`{"evt":"reject","reason":"…","webhookUuid":"d1c7e4…"}`. The webhook UUID
+appears only as a 6-character prefix; the signing secret never appears at all;
+envelope contents are never logged and never echoed in a response (bodies are
+always empty).
+
+**All four authentication failures return the same bare 401.** From outside the
+endpoint they are indistinguishable, deliberately — a distinct 404 for
+"unknown token" used to tell a prober which farms were real. Only the log tells
+you which one it was:
 
 | `reason` | HTTP | What actually happened | What to do |
 |---|---|---|---|
-| `bad_path_or_token_shape` | 404 | Final path segment is not 32–64 hex chars. Someone is scanning, or the callback URI is malformed. | Compare the URI in MDP against `farms.webhook_token`. |
-| `unknown_token` | 404 | Token is well-formed but matches no farm. | Token was rotated and MDP was not updated (§5), or the farm row is gone. |
-| `rate_limited` | 429 | More than 300 requests/minute for this token **in one isolate**. | §2.1. |
+| `signature_headers_missing` | 401 | The delivery carried no `x-msc-*` headers (or malformed ones). | Signing is off on the callback in MDP, or this is not MDP. §5. |
+| `unknown_webhook_uuid` | 401 | `x-msc-webhook-uuid` matches no row in `mdp_webhook_credentials`. | Either the farm was never provisioned (§5.4) or the Application was recreated and we still hold the old UUID (§5.2). |
+| `stale_timestamp` | 401 | `x-msc-request-timestamp` is more than 300 s from our clock. | Almost always a replay. If it is *every* delivery, suspect MDP's clock. |
+| `bad_signature` | 401 | HMAC did not match. | The secret rotated. §5. |
+| `rate_limited` | 429 | More than 300 requests/minute for this **webhook UUID** in one isolate. | §2.1. |
 | `body_too_large` | 413 | Body over 256 KB. Envelopes are ~1 KB. | Somebody is batching enormously, or it is abuse. |
 | `body_not_json` | 400 | Body did not parse. | Not MDP. Check the URI is not being proxied by something. |
 | `empty_batch` | 400 | JSON array with zero elements. | Harmless; MDP config oddity. |
-| `signature_headers_missing` | 401 | Credentials are stored for this farm, but the delivery had no `x-msc-*` headers. | §5. |
-| `webhook_uuid_mismatch` | 401 | `x-msc-webhook-uuid` is not the UUID we have stored. | The Application was recreated. §5. |
-| `stale_timestamp` | 401 | `x-msc-request-timestamp` is more than 300 s from our clock. | Almost always a replay. If it is *every* delivery, suspect MDP's clock. |
-| `bad_signature` | 401 | HMAC did not match. | The secret rotated. §5. |
+
+There is no `unknown_token`, no `bad_path_or_token_shape`, and no 404. The path
+is not consulted when deciding whether to accept a delivery (migration 0022).
 
 Envelope-shape rejections (also `evt: reject`, with `source: "milesight_mdp"`).
 These are validated **per element** — one bad envelope in a batch does not
@@ -196,7 +218,9 @@ Non-rejection events worth recognising in the log:
 | `evt` | Meaning |
 |---|---|
 | `replay_dropped` | Same `eventId` seen before. **Normal.** MDP retries; a replay is a 200, not an error. |
-| `signature_skipped` | No row in `mdp_webhook_credentials` for this farm — accepted **unsigned**. Expected during install, a problem afterwards. §5.3. |
+| `legacy_token_url` | Delivery arrived on the old `…/mdp-webhook/<token>` URI. Accepted normally — the token is ignored — but this farm's MDP console has not been re-pointed and its old token is still being written to the platform log. §5.5. Logged once per farm per isolate. |
+| `legacy_token_url_mismatch` | Same, but the token in the path is not this farm's. Someone pasted one farm's callback URI into another farm's Application. Harmless now (the signature decides), but the console is wrong. §5.5. |
+| `farm_missing_for_credentials` | A credentials row points at a farm that does not exist. Returns 500 so MDP retries. Should be impossible — the FK cascades. Escalate. |
 | `unknown_dev_eui_dropped` | Device is not in `devices` for that farm. Logged and dropped, **never auto-created** (CLAUDE.md #12). §4.4. |
 | `normalize_skipped` | Envelope was fine but produced no canonical reading (`not_device_data`, `ignored_event_type`, `no_canonical_readings`). Raw row kept, status `ignored`. |
 | `dead_lettered` | Normalization threw. §3. |
@@ -205,7 +229,7 @@ Non-rejection events worth recognising in the log:
 
 ### 2.1 About `rate_limited`
 
-The limiter is 300 requests/minute per token, held **in memory per isolate**
+The limiter is 300 requests/minute per **webhook UUID**, held **in memory per isolate**
 (`supabase/functions/mdp-webhook/rate_limit.ts`). Supabase runs N isolates and
 recycles them, so the true ceiling is 300 × live isolates and the window
 resets on every cold start.
@@ -219,7 +243,13 @@ Two consequences at 2am:
 MDP batches: one POST carries a JSON array, so a farm's real event rate can be
 far above 300/min without touching the limiter. If you are seeing 429s from a
 real farm, raise `RATE_MAX_PER_WINDOW` in `index.ts` and redeploy — do not
-disable the limiter, it is the compensating control for token scanning.
+disable the limiter, it is what bounds credential-guessing and lookup abuse.
+
+The key changed with migration 0022 and that matters. It used to be the path
+token, which the platform log printed in full on every delivery — so anyone who
+could read logs could burn a real farm's budget from outside and push MDP into
+retry-then-`SYSTEM_MESSAGES`, which loses data inside MDP's one-day retention.
+The webhook UUID is a request header and never reaches a log line.
 
 ---
 
@@ -441,35 +471,48 @@ the row is right.
 
 ---
 
-## 5. The signature started failing
+## 5. Authentication — the 401s
 
-Symptoms: `bad_signature`, `webhook_uuid_mismatch`, `signature_headers_missing`,
+Symptoms: `bad_signature`, `unknown_webhook_uuid`, `signature_headers_missing`,
 or `stale_timestamp` in the function log; MDP sees 401s and eventually raises
 `SYSTEM_MESSAGES`.
 
-### 5.1 What is actually signed
+### 5.1 What authenticates a delivery, and what does not
 
-MDP sends four headers (discovered by capturing a live callback on
+**Since migration 0022 the MDP signature is the only authenticator.** MDP sends
+four headers on every delivery (discovered by capturing a live callback on
 2026-08-03; the published docs say webhooks are unsigned and are wrong):
 
 ```
-x-msc-webhook-uuid        selects the secret
+x-msc-webhook-uuid        identifies the Application → RESOLVES THE FARM
 x-msc-request-nonce       random per delivery
-x-msc-request-timestamp   Unix seconds
+x-msc-request-timestamp   Unix seconds, must be within ±300 s of our clock
 x-msc-request-signature   hex HMAC-SHA256(secret, timestamp || nonce)
 ```
 
+The farm is looked up by `mdp_webhook_credentials.webhook_uuid`. **A farm with
+no row in that table cannot ingest at all** — see §5.4.
+
+**The URL authenticates nothing.** It used to end in `farms.webhook_token`,
+which was the primary authentication and which Supabase's platform log printed
+in full on every invocation. Log access was therefore endpoint access. The
+canonical callback URI is now
+`https://lropxenygvybctvaspxm.supabase.co/functions/v1/mdp-webhook` with no
+trailing token; the old form still routes so nothing broke, and the trailing
+token is read only to log which consoles still need re-pointing (§5.5).
+
 The signature covers **timestamp + nonce, not the body**. It authenticates the
 sender, not the message. The freshness window (±300 s), `eventId` idempotency,
-and the per-farm path token carry the rest.
+and TLS carry the rest. The path token never covered the body either, so
+retiring it lost nothing.
 
 ### 5.2 What can rotate, and what breaks
 
 | Rotated | Reason code you see | Fix |
 |---|---|---|
 | Application **webhook secret** (MDP console) | `bad_signature` | Copy the new Secret into `mdp_webhook_credentials.webhook_secret` |
-| Application **recreated** (new webhook UUID) | `webhook_uuid_mismatch` | Update both `webhook_uuid` and `webhook_secret` |
-| Our **farm token** (`farms.webhook_token`) | `unknown_token` (404) | Update the callback URI in MDP |
+| Application **recreated** (new webhook UUID) | `unknown_webhook_uuid` | Update both `webhook_uuid` and `webhook_secret` |
+| Our **farm token** (`farms.webhook_token`) | nothing — it is not checked | Nothing to do. Rotation is lossless because it is inert. |
 | Webhook turned off / re-added in MDP | `signature_headers_missing` | Re-enable signing on the callback |
 | Clock skew > 300 s | `stale_timestamp` | Our clock is Supabase's; suspect MDP or a replay |
 
@@ -479,13 +522,20 @@ Credentials are staff-only (`mdp_webhook_credentials`, RLS on, no member
 policies — org members can read their own `farms` row, so signing material
 deliberately does not live there).
 
+Prefer the admin console: `/admin/farms/<farm_id>` → **Webhook signing
+material**. It normalises the UUID and records who changed it and why. SQL if
+the console is unavailable:
+
 ```sql
 -- what we currently hold (NEVER select webhook_secret into a chat or ticket)
 select farm_id, webhook_uuid, rotated_at from mdp_webhook_credentials;
 
--- after copying the new values out of MDP → Application → Webhook
+-- after copying the new values out of MDP → Application → Webhook.
+-- webhook_uuid MUST be lowercase and untrimmed-of-nothing: it is the lookup
+-- key now, and a constraint (0022) rejects anything else rather than letting
+-- the farm 401 silently.
 update mdp_webhook_credentials
-   set webhook_uuid = '<uuid from MDP>',
+   set webhook_uuid = lower(btrim('<uuid from MDP>')),
        webhook_secret = '<secret from MDP>',
        rotated_at = now()
  where farm_id = '<farm_id>';
@@ -494,34 +544,55 @@ update mdp_webhook_credentials
 **Deliveries fail 401 for the whole gap.** MDP retries, so a short gap is
 usually recovered; a long one loses data permanently (one-day retention).
 
-If credentials are missing entirely the function accepts **unsigned** and logs
-`signature_skipped` — deliberate, so a half-provisioned install does not drop
-real readings on the floor. Do not leave a live farm in that state:
+### 5.4 A farm with no signing material cannot ingest
+
+This is the one behaviour change from migration 0022 that can bite during an
+install, so it is stated plainly: **if `mdp_webhook_credentials` has no row for
+a farm, every delivery for that farm is refused with a 401** and logged as
+`unknown_webhook_uuid`.
+
+The function used to accept unsigned deliveries in that state, on the reasoning
+that a half-provisioned install should not drop real readings. That fallback
+was the log-exposure hole — it meant a path token read out of the logs was
+sufficient to inject telemetry into any unprovisioned farm — so it is gone.
+
+It is safe to fail closed because of the order MDP imposes: creating the
+Application generates the webhook UUID and Secret, and a callback URI cannot be
+configured until the Application exists. The signing material always exists
+before the first delivery can be sent. Record it first:
 
 ```sql
+-- farms that cannot currently ingest
 select f.id, f.name from farms f
 left join mdp_webhook_credentials c on c.farm_id = f.id
 where c.farm_id is null;
 ```
 
-### 5.4 Rotating our farm token
+Install order, corrected: create the Group/Application in MDP → paste the
+webhook UUID and Secret into `/admin/farms/<id>` → **then** add the callback
+URI in MDP and press Test.
 
-```sql
-update farms
-   set webhook_token = encode(extensions.gen_random_bytes(24), 'hex')
- where id = '<farm_id>'
-returning webhook_token;
-```
+### 5.5 Re-pointing a console off the old token URI
 
-Then immediately set the callback URI in MDP to
-`https://lropxenygvybctvaspxm.supabase.co/functions/v1/mdp-webhook/<new token>`.
-Deliveries 404 between the two steps — do them back to back. A botched
-rotation is self-announcing: repeated failures make MDP raise
-`SYSTEM_MESSAGES`, which becomes a staff alert.
+Old `…/mdp-webhook/<token>` URIs still work. Nothing is urgent. But every
+delivery on one writes that farm's old token into the platform log, so the
+worklist is worth clearing.
 
-**Gap:** there is one token column, so a zero-drop overlapping rotation is not
-possible today. MDP allows 2–5 callback URIs per Application, so a second
-token column would make rotation lossless. Not built.
+Find them: filter the function log for `legacy_token_url` (logged once per farm
+per isolate, with `farmId`). `legacy_token_url_mismatch` means the path token
+is not even that farm's — someone pasted the wrong callback URI into an
+Application; the signature routed it correctly anyway.
+
+For each farm named:
+
+1. MDP → Application → Application Settings → Webhook → edit the Callback URI
+   to `https://lropxenygvybctvaspxm.supabase.co/functions/v1/mdp-webhook`.
+2. Press **Test**. A `WEBHOOK_TEST` row appears in `raw_events` with
+   `status = 'ignored'`; that is success.
+
+There is no window in which deliveries fail — both URI shapes route, and the
+switch takes effect on the next delivery. `farms.webhook_token` can be left
+alone; it is inert.
 
 ---
 
@@ -540,8 +611,8 @@ select mdp_event_id, event_type, status, received_at
 from raw_events order by received_at desc limit 5;
 ```
 Expect a `WEBHOOK_TEST` row with status `ignored` — accepted, stored, no
-normalization. That alone proves: routing, token, signature, dedup, raw
-persist.
+normalization. That alone proves: routing, farm resolution by webhook UUID,
+signature, dedup, raw persist.
 
 **2. Prove a real reading lands and normalizes.** Debug Panel → simulate a
 report from a real (or virtual) device whose `dev_eui` is in `devices`:
@@ -652,7 +723,8 @@ inserts/min. Postgres is not the constraint — statement time is 0.1–0.25 ms
 **Escalate to the owner immediately if:** `raw_events` has been silent for
 more than 2 hours across all farms; `dlq_open` is over 25 and climbing; an
 `mdp_system_messages` alert is open; or you are about to change
-`farms.webhook_token` or `mdp_webhook_credentials` on a live farm.
+`mdp_webhook_credentials` on a live farm. (`farms.webhook_token` no longer
+needs escalation — nothing reads it.)
 
 Gaps named above, collected — each is a place where the honest answer is "we
 cannot see that yet":
@@ -667,8 +739,8 @@ cannot see that yet":
 | No expected-interval silence detector | `device_health.expected_interval_s` is stored and never read |
 | Nothing writes `gateways.last_seen_at` | `gateway_offline` alerts are permanently true — noise |
 | No end-to-end canary | Every verification is a human pressing Test in MDP |
-| Single `webhook_token` column | Token rotation always has a lossy window |
-| Platform edge logs contain the full farm token in the request URL | Log access = token access; nobody can safely share a log line |
+| The signature covers timestamp + nonce, **not the body** | It authenticates the sender, not the message. A network attacker who could capture a delivery could replay those headers with a different body inside the 300 s window. TLS prevents the capture; `eventId` idempotency blunts the replay. Milesight's design, not ours — we cannot fix it from here. |
+| No alert when a farm is refused for having no credentials | An install that skipped the signing-material step 401s silently until someone reads the log (§5.4). An alert on `unknown_webhook_uuid` would be writable by anyone unauthenticated, so it was not built. |
 | `received_at` is arrival time | The ingest-rate chart overstates throughput during a backlog |
 | No alert on ingest silence itself | The one failure this runbook exists for has no automatic trigger |
 

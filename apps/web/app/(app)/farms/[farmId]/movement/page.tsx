@@ -147,8 +147,11 @@ export default async function MovementPage({ params }: { params: Promise<{ farmI
 
   return (
     <Pad>
-      {/* The bar owns navigation. Movement is not one of its four tabs — it is
-          reached from the farm overview — so nothing here repeats it. */}
+      {/* The bar owns navigation. Movement is not one of its four tabs, so it
+          is reached from the two screens whose subject it is: the farm
+          overview's "This farm" card, and the Gate activity card on any pen —
+          gate swings and moves are exactly what that card shows, and it is on
+          the path a rancher already walks. Nothing here repeats the bar. */}
       <PageHeader
         title="Movement"
         sub={

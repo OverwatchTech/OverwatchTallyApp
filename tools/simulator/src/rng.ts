@@ -53,6 +53,33 @@ export function rngFrom(seed: string | number): Rng {
   };
 }
 
+/**
+ * A stable UUID derived from a string. NOT random, and that is the point:
+ * `feed_events` rows the simulator writes get an id that is a function of the
+ * farm, the pen and the instant, so re-running a backfill over a window it
+ * has already covered UPDATES those rows instead of laying a second
+ * population on top of the first.
+ *
+ * That is not hypothetical. Two populations of `feed_events` covering the same
+ * fortnight is exactly what made Fed-per-day read 41.6 lb/head/day against a
+ * plausible 14–16 (migration 0020). Idempotency at the writer is the half of
+ * that fix which stops it happening again.
+ *
+ * Well formed: version nibble 4 and the RFC-4122 variant bits, so Postgres
+ * accepts it as a uuid. Four salted FNV-1a hashes — ample for a few hundred
+ * rows a day, and deterministic across runs and platforms, which `hash32`
+ * already guarantees.
+ */
+export function uuidFrom(text: string): string {
+  const part = (salt: string): string =>
+    hash32(`${salt}:${text}`).toString(16).padStart(8, '0');
+  const a = part('u0');
+  const b = part('u1');
+  const c = part('u2');
+  const d = part('u3');
+  return `${a}-${b.slice(0, 4)}-4${b.slice(5, 8)}-8${c.slice(1, 4)}-${c.slice(4, 8)}${d}`;
+}
+
 /** Clamps to a closed interval. */
 export function clamp(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;

@@ -1,0 +1,106 @@
+/*
+  Signed-out screen.
+
+  A signed-out page has no bar, so it does not mount AppShell — and without
+  AppShell it also loses `.ow-view`, which is where the mockup's two radial
+  washes live. Everything here either re-states one of those mockup values
+  verbatim or does the one thing the shell was doing for the page: own the
+  field the card sits on. No new colour is introduced; every value below is a
+  token or a literal copied from docs/reference/portal-mockup.html.
+*/
+
+.field {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  /* .ow-view's washes, verbatim — teal top-right, sel bottom-left. */
+  background:
+    radial-gradient(1000px 600px at 75% -10%, rgba(45, 212, 167, 0.05), transparent 60%),
+    radial-gradient(900px 700px at 10% 110%, rgba(77, 163, 255, 0.04), transparent 60%),
+    var(--bg);
+}
+
+.column {
+  width: 100%;
+  max-width: 380px;
+  min-width: 0;
+}
+
+/*
+  The lockup is the largest brand element on a page that has no 54px bar, so
+  it steps up from the bar's 15px/28px. Same gradient, same glow, same teal
+  second word — only the scale moves.
+*/
+.brand {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+.brand :global(.ow-brand) {
+  font-size: 17px;
+}
+.brand :global(.ow-brandmark) {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  font-size: 16px;
+}
+
+/* The one line that says what this is. */
+.tagline {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink2);
+  text-align: center;
+  margin-bottom: 22px;
+  text-wrap: balance;
+}
+
+/* The card is the page's whole content here, so it does not need the
+   16px stack margin .ow-card carries inside a scrolling view. */
+.card {
+  margin-bottom: 0;
+}
+
+/* A Callout inside the form is a sibling, not a stack item. */
+.notice {
+  margin-bottom: 0;
+}
+
+/*
+  Keyboard focus. .ow-input:focus deliberately drops the outline and moves the
+  border to teal, which is the product's idiom but is thin at 1px and does
+  nothing at all for .ow-btn. Both controls get a real ring in --ink: neutral,
+  so it reads on the dark input and on the teal gradient of .ow-btn.pri alike,
+  and it borrows no semantic colour.
+*/
+.field :global(.ow-input):focus-visible,
+.field :global(.ow-btn):focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  /*
+    .ow-btn carries a blanket `transition:.12s`, which animates `outline`
+    along with everything else and fades the ring in over 120ms. A focus ring
+    has to be there the instant the key lands, so name the properties that may
+    still transition and leave outline out of the list.
+  */
+  transition-property: border-color, background-color, color;
+}
+
+/*
+  What the console covers — no numbers, because there are none to report
+  before sign-in (CLAUDE.md #8).
+
+  Separated by space, not by bullets: at 375 the row wraps, and any separator
+  glyph — ::before or ::after — strands a lone dot at a line edge. The
+  micro-label's own 0.08em tracking already reads the items apart.
+*/
+.coverage {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px 18px;
+  margin-top: 20px;
+}

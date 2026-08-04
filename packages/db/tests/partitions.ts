@@ -23,9 +23,10 @@
  * PostgREST exposes only the tables and functions of the exposed schemas; a
  * client cannot read `pg_class` directly. The bridge is one read-only
  * SECURITY DEFINER function, `public.partition_rls_audit()`, EXECUTE granted
- * to `service_role` alone — the DDL is in `partition-rls-audit.sql` beside
- * this file. It hands back no row data, only catalog metadata, and the role
- * that may call it already bypasses RLS entirely, so it widens nothing.
+ * to `service_role` alone — the DDL is in
+ * `packages/db/migrations/0023_partition_hardening.sql` (PART 2). It hands back
+ * no row data, only catalog metadata, and the role that may call it already
+ * bypasses RLS entirely, so it widens nothing.
  *
  * If the function is missing the suite FAILS with the DDL in the message. It
  * does not skip. A partition audit that quietly declines to run is exactly the
@@ -72,7 +73,8 @@ export interface PartitionAudit {
 export const AUDIT_RPC_MISSING = [
   `public.${AUDIT_RPC}() is not installed, so partition row security is`,
   'UNVERIFIED. This is the exact hole that leaked 1,050 rows of telemetry.',
-  'Install it (see packages/db/tests/partition-rls-audit.sql):',
+  'Install it — the DDL is PART 2 of',
+  'packages/db/migrations/0023_partition_hardening.sql:',
   '',
   '  -- read-only catalog audit; service_role only, and service_role already',
   '  -- bypasses RLS, so this grants no capability it did not have.',

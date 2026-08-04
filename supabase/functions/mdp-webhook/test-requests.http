@@ -7,8 +7,28 @@
 #
 # ── setup ────────────────────────────────────────────────────────────────────
 #
+# SINCE MIGRATION 0022 A BARE CURL IS ALWAYS A 401. The per-farm path token
+# stopped being a credential — Supabase's platform edge log printed it in full
+# on every delivery — and authentication is now the MDP signature headers
+# alone. Every POST below must carry them; the URL carries nothing.
+#
 #   BASE="https://lropxenygvybctvaspxm.supabase.co/functions/v1/mdp-webhook"
-#   TOKEN="$(psql ... -c "select webhook_token from farms where name='Demo Ranch'")"
+#   UUID="$(psql ... -c "select webhook_uuid   from mdp_webhook_credentials where farm_id='<farm>'")"
+#   SECRET="$(psql ... -c "select webhook_secret from mdp_webhook_credentials where farm_id='<farm>'")"
+#
+#   sign() {
+#     local ts nonce sig
+#     ts=$(date +%s)
+#     nonce=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+#     sig=$(printf '%s%s' "$ts" "$nonce" \
+#       | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $NF}')
+#     printf -- '-H x-msc-webhook-uuid:%s -H x-msc-request-nonce:%s ' "$UUID" "$nonce"
+#     printf -- '-H x-msc-request-timestamp:%s -H x-msc-request-signature:%s' "$ts" "$sig"
+#   }
+#
+# For the authentication matrix specifically — every accept and reject path,
+# run against the deployed function — use ./auth-matrix.mjs instead. It reads
+# the credentials itself and prints nothing secret.
 #
 # Seed one test device for the farm (internal vocabulary — admin/SQL only;
 # there is no self-serve device path):
@@ -22,7 +42,7 @@
 
 ### 1. Valid PROPERTY reading — the normal case
 # expect: 200
-curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+curl -si -X POST "$BASE" $(sign) -H 'Content-Type: application/json' -d '{
   "eventID": "11111111-0000-4000-8000-000000000001",
   "eventCreatedTime": "1742872448",
   "eventVersion": "1.0",
@@ -51,7 +71,7 @@ curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
 
 ### 2. Replay — same eventID again (MDP retries are expected)
 # expect: 200, and NO new rows anywhere
-curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+curl -si -X POST "$BASE" $(sign) -H 'Content-Type: application/json' -d '{
   "eventID": "11111111-0000-4000-8000-000000000001",
   "eventCreatedTime": "1742872448",
   "eventVersion": "1.0",
@@ -68,7 +88,7 @@ curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
 
 ### 3. Unknown devEUI — logged and dropped, never auto-created
 # expect: 200 (raw is persisted; the drop happens at normalization)
-curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+curl -si -X POST "$BASE" $(sign) -H 'Content-Type: application/json' -d '{
   "eventID": "11111111-0000-4000-8000-000000000003",
   "eventCreatedTime": "1742872500",
   "eventType": "DEVICE_DATA",
@@ -83,20 +103,58 @@ curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
 #   select count(*) from devices where dev_eui = '24E124FFFFFF9999';  -- 0 (NEVER auto-created)
 #   function logs show evt=unknown_dev_eui_dropped with a running total
 
-### 4. Unknown token
-# expect: 404, empty body (reason in logs only; nothing echoed)
-curl -si -X POST "$BASE/000000000000000000000000000000000000000000000000" \
-  -H 'Content-Type: application/json' -d '{
+### 4. Not authenticated — four ways, one indistinguishable answer
+# expect: 401 for every one of these, with an empty body. The distinct 404 for
+# "unknown token" is gone: it told a prober which farms were real.
+# Only the function log says which reason fired.
+BODY='{
   "eventID": "11111111-0000-4000-8000-000000000004",
   "eventCreatedTime": "1742872500",
   "eventType": "DEVICE_DATA",
   "data": { "deviceProfile": { "devEUI": "24E124707E051234" }, "type": "PROPERTY", "payload": {} }
 }'
-# verify: no rows created anywhere; logs show evt=reject reason=unknown_token
+
+# 4a. No signature headers at all. THIS IS THE ONE THAT MATTERS: it is exactly
+#     what someone who read a farm token out of the platform edge log can do,
+#     and before migration 0022 it was a 200.
+curl -si -X POST "$BASE/$SOME_TOKEN_FROM_THE_LOG" \
+  -H 'Content-Type: application/json' -d "$BODY"
+#     → 401 · reason=signature_headers_missing
+
+# 4b. Forged signature (right shape, wrong secret).
+SECRET=wrong curl -si -X POST "$BASE" $(SECRET=wrong sign) \
+  -H 'Content-Type: application/json' -d "$BODY"
+#     → 401 · reason=bad_signature
+
+# 4c. Unknown Application.
+UUID=00000000-0000-4000-8000-000000000000 curl -si -X POST "$BASE" \
+  $(UUID=00000000-0000-4000-8000-000000000000 sign) \
+  -H 'Content-Type: application/json' -d "$BODY"
+#     → 401 · reason=unknown_webhook_uuid
+
+# 4d. A correctly signed header set captured earlier and replayed late.
+#     (Reproduce by setting ts=$(( $(date +%s) - 3600 )) inside sign.)
+#     → 401 · reason=stale_timestamp
+
+# verify for all four: no rows created anywhere.
+#   select count(*) from raw_events
+#   where mdp_event_id = '11111111-0000-4000-8000-000000000004';  -- 0
+
+### 4e. A signed delivery on an OLD token-bearing URI still ingests
+# expect: 200 — existing MDP consoles keep working; the token is ignored.
+curl -si -X POST "$BASE/$ANY_48_HEX" $(sign) \
+  -H 'Content-Type: application/json' -d '{
+  "eventID": "11111111-0000-4000-8000-00000000004e",
+  "eventCreatedTime": "1742872500",
+  "eventType": "WEBHOOK_TEST",
+  "data": "legacy uri"
+}'
+# verify: raw_events row at status 'ignored'; function log carries
+#   evt=legacy_token_url (or legacy_token_url_mismatch) naming the farm.
 
 ### 5. Malformed envelope — missing eventID
 # expect: 400, empty body, no DB writes (validation precedes any DB touch)
-curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+curl -si -X POST "$BASE" $(sign) -H 'Content-Type: application/json' -d '{
   "eventCreatedTime": "1742872500",
   "eventType": "DEVICE_DATA",
   "data": { "deviceProfile": { "devEUI": "24E124707E051234" }, "type": "PROPERTY", "payload": {} }
@@ -106,7 +164,7 @@ curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
 
 ### 6. OFFLINE event — connectivity change feeds device_health
 # expect: 200
-curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+curl -si -X POST "$BASE" $(sign) -H 'Content-Type: application/json' -d '{
   "eventID": "11111111-0000-4000-8000-000000000006",
   "eventCreatedTime": "1742872600",
   "eventType": "DEVICE_DATA",
@@ -125,7 +183,7 @@ curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
 # expect: 200
 # [VERIFY] the real data block shape via the live Webhook Simulation tab —
 # the function persists it verbatim regardless.
-curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
+curl -si -X POST "$BASE" $(sign) -H 'Content-Type: application/json' -d '{
   "eventID": "11111111-0000-4000-8000-000000000007",
   "eventCreatedTime": "1742872700",
   "eventType": "SYSTEM_MESSAGES",
@@ -138,8 +196,8 @@ curl -si -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' -d '{
 #   -- fire it twice: second insert hits alerts_open_dedup → logged as
 #   -- already-open, still exactly one open row
 
-### 8. (bonus) Rate limit — burst past 300/min on one token
+### 8. (bonus) Rate limit — burst past 300/min on one webhook UUID
 # expect: 429 after the cap; per-isolate, so distribute-and-observe on prod
 # for i in $(seq 1 320); do curl -s -o /dev/null -w '%{http_code}\n' \
-#   -X POST "$BASE/$TOKEN" -H 'Content-Type: application/json' \
+#   -X POST "$BASE" $(sign) -H 'Content-Type: application/json' \
 #   -d "{\"eventID\":\"burst-$i\",\"eventCreatedTime\":\"1742872800\",\"eventType\":\"WEBHOOK_TEST\"}"; done | sort | uniq -c

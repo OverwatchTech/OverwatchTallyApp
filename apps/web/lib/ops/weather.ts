@@ -170,3 +170,82 @@ export async function fetchWeatherWindow(
     gridpoint,
   };
 }
+
+// ── Leaving the adjustment where the alert engine can find it ───────
+
+/**
+ * The days-of-feed ALERT lives in Postgres. `app.evaluate_alert_rules()` runs
+ * under pg_cron; it cannot call api.weather.gov, and before 0020 it therefore
+ * had no weather term at all while every screen divided demand by one. The two
+ * agreed only while the multiplier happened to be exactly 1.0 — which is most
+ * of the year in the thermoneutral band, and none of the days a rancher is
+ * actually worried about the hay.
+ *
+ * Rather than have SQL re-derive a temperature from bunk radars and soil
+ * probes — which would produce a number NEAR the screen's and never equal to
+ * it — the screens leave theirs behind. One row per farm, overwritten on each
+ * load, read by `app.alert_cond_days_on_hand_low`. Same fetch, same curve,
+ * same multiplier, so the card and the screen it links to cannot disagree.
+ *
+ * NEVER THROWS. This runs inside a page render. A failed cache write is not a
+ * reason to fail a screen, and the alert's own fallback is already honest: a
+ * snapshot older than `weather_max_age_hours` is ignored and the alert reports
+ * `weather_source: 'stale'` rather than implying weather was allowed for.
+ */
+export interface WeatherSnapshotWrite {
+  farmId: string;
+  orgId: string;
+  airTempC: number | null;
+  windSpeedMps: number | null;
+  effectiveTempC: number | null;
+  multiplier: number;
+  zone: 'cold' | 'thermoneutral' | 'heat';
+  capped: boolean;
+  samples: number | null;
+  gridpoint: string | null;
+  /** The curve as applied, so a later override cannot reinterpret this row. */
+  curve: Record<string, number>;
+}
+
+interface UpsertOnly {
+  from: (table: string) => {
+    upsert: (
+      row: Record<string, unknown>,
+      opts: { onConflict: string },
+    ) => PromiseLike<unknown>;
+  };
+}
+
+export async function recordWeatherSnapshot(
+  // `farm_weather_snapshots` postdates the last `pnpm db:types`, so this goes
+  // through an untyped client — the same pattern, and the same trap, as
+  // `fetchWasteFactors`: cast the CLIENT, never the method, because
+  // `supabase.from` reads `this.rest` internally and a detached method throws
+  // at request time while typecheck passes.
+  supabase: unknown,
+  snapshot: WeatherSnapshotWrite,
+): Promise<void> {
+  try {
+    const untyped = supabase as UpsertOnly;
+    await untyped.from('farm_weather_snapshots').upsert(
+      {
+        farm_id: snapshot.farmId,
+        org_id: snapshot.orgId,
+        air_temp_c: snapshot.airTempC,
+        wind_speed_mps: snapshot.windSpeedMps,
+        effective_temp_c: snapshot.effectiveTempC,
+        multiplier: snapshot.multiplier,
+        zone: snapshot.zone,
+        capped: snapshot.capped,
+        samples: snapshot.samples,
+        gridpoint: snapshot.gridpoint,
+        source: 'nws_gridpoint',
+        curve: snapshot.curve,
+        computed_at: new Date().toISOString(),
+      },
+      { onConflict: 'farm_id' },
+    );
+  } catch {
+    // Deliberately silent. See the contract above.
+  }
+}

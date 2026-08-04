@@ -64,7 +64,7 @@ import {
   type MeasuredRate,
 } from './feed';
 import { fetchFeedData } from './queries';
-import { fetchWeatherWindow, type WeatherWindow } from './weather';
+import { fetchWeatherWindow, recordWeatherSnapshot, type WeatherWindow } from './weather';
 
 type Client = SupabaseClient<Database>;
 
@@ -494,11 +494,63 @@ export async function loadDaysOfFeed(
     centroid === null ? null : await fetchWeatherWindow(centroid.lat, centroid.lon);
 
   const days = rateDayKeys(timezone, now);
-  return computeDaysOfFeed({
+  const result = computeDaysOfFeed({
     lines: inventoryLines(feed.inventory, feed.baleTypes, feed.calibrations),
     daily: dailyDispensedByPen(feed.events, timezone, days),
     waste: resolveWasteFactor(wasteRows),
     weather,
+  });
+
+  await persistWeatherSnapshot(supabase, farmId, result);
+  return result;
+}
+
+/**
+ * Hands the weather multiplier this screen just computed to the alert engine.
+ *
+ * `app.alert_cond_days_on_hand_low` runs inside Postgres under pg_cron and
+ * cannot reach api.weather.gov. Until 0020 it therefore had NO weather term
+ * while every screen had one, so the alert card and the screen it links to
+ * agreed only while the multiplier was exactly 1.0. They now divide by the
+ * same number because it is the same number, fetched once, written here.
+ *
+ * Awaited, not fire-and-forget — a floating promise in a server component can
+ * be torn down before it lands — but it can never throw and never fails a
+ * render. When nothing has been written, or the row has gone stale, the alert
+ * falls back to 1.0 and reports `weather_source` as `missing` or `stale`
+ * rather than implying weather was allowed for.
+ */
+export async function persistWeatherSnapshot(
+  supabase: Client,
+  farmId: string,
+  result: FarmDaysOfFeed,
+): Promise<void> {
+  const adjustment = result.adjustment;
+  if (adjustment === null || adjustment.multiplier === null) return;
+
+  // The row is keyed by farm but carries org_id, because every RLS predicate
+  // in this schema is written on org_id. Read it from the farm rather than
+  // trusting a caller to pass the right one.
+  const { data: farm } = await supabase
+    .from('farms')
+    .select('org_id')
+    .eq('id', farmId)
+    .maybeSingle();
+  const orgId = farm?.org_id;
+  if (typeof orgId !== 'string') return;
+
+  await recordWeatherSnapshot(supabase, {
+    farmId,
+    orgId,
+    airTempC: result.weather?.airTempC ?? null,
+    windSpeedMps: result.weather?.windSpeedMps ?? null,
+    effectiveTempC: result.effectiveTempC,
+    multiplier: adjustment.multiplier,
+    zone: adjustment.zone,
+    capped: adjustment.capped,
+    samples: result.weather?.samples ?? null,
+    gridpoint: result.weather?.gridpoint ?? null,
+    curve: { ...adjustment.inputs.curve },
   });
 }
 

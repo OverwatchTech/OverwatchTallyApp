@@ -21,7 +21,6 @@ import {
   ApiCredentialsForm,
   ApplicationForm,
   RegisterDevicesForm,
-  RotateTokenForm,
   WebhookCredentialsForm,
 } from './provisioning-forms';
 
@@ -164,13 +163,30 @@ export default async function FarmProvisioningPage({
 
       <Panel
         title="Callback URI"
-        note="Paste this into the Application's webhook settings. The trailing token is this farm's path secret — treat the whole URI as a credential."
+        note="Paste this into the Application's webhook settings. It carries no secret and it is the same for every farm — deliveries are identified and authenticated by the signing material below, not by the address."
       >
         <div className="ow-bd">
           <code className="ow-code">{farm.callbackUri}</code>
         </div>
-        <div style={{ borderTop: '1px solid var(--line)' }}>
-          <RotateTokenForm farmId={farmId} />
+        <div className="ow-bd" style={{ borderTop: '1px solid var(--line)' }}>
+          <p className="ow-quiet">
+            This URI used to end in a per-farm token. Supabase writes the full request address into
+            the edge-function log on every delivery, so that token was readable by anyone who could
+            read logs — which is a much wider group than the people trusted with credentials. It was
+            retired in migration 0022 and the signature headers now do the whole job.
+          </p>
+          <p className="ow-quiet">
+            Old token-bearing URIs still work, so nothing breaks while consoles are being
+            re-pointed. Until this farm&rsquo;s console is moved, the webhook logs{' '}
+            <code className="ow-code">legacy_token_url</code> naming the farm.
+          </p>
+          {!farm.webhook && (
+            <p className="ow-quiet ow-wrong">
+              No signing material is stored for this farm, so every delivery to this address is
+              refused with a 401. Record the webhook id and secret below before enabling the
+              callback in MDP.
+            </p>
+          )}
         </div>
       </Panel>
 
@@ -203,7 +219,7 @@ export default async function FarmProvisioningPage({
 
       <Panel
         title="Webhook signing material"
-        note="Undocumented by Milesight but present on the wire: x-msc-webhook-uuid, nonce, timestamp, and an HMAC-SHA256 signature over timestamp ‖ nonce."
+        note="Undocumented by Milesight but present on the wire: x-msc-webhook-uuid, nonce, timestamp, and an HMAC-SHA256 signature over timestamp ‖ nonce. Since migration 0022 this is the only thing that authenticates a delivery — the webhook id also selects which farm the reading belongs to."
       >
         {farm.webhook ? (
           <Facts>
@@ -213,7 +229,8 @@ export default async function FarmProvisioningPage({
           </Facts>
         ) : (
           <Empty>
-            No signing material stored. Deliveries for this farm cannot be verified until it is.
+            No signing material stored. Every delivery for this farm is refused with a 401 until it
+            is — record it before the callback goes live in MDP, not after.
           </Empty>
         )}
         <WebhookCredentialsForm farmId={farmId} />

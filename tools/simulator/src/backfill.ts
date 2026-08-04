@@ -11,6 +11,7 @@ import type { Pg } from './pg.ts';
 import { retryOnSchemaChange } from './pg.ts';
 import type { Layout } from './layout.ts';
 import type { VirtualDevice } from './fleet.ts';
+import { uuidFrom } from './rng.ts';
 import { World, LITRES_PER_PULSE } from './world.ts';
 import { buildRollups, normalizeForWrite, type ReadingRow } from './ingest.ts';
 
@@ -264,19 +265,32 @@ export async function writeOperationalRows(
   if (feed.length > 0) {
     await pg.insertBatched(
       'feed_events',
-      feed.map((f) => ({
-        org_id: layout.farm.org_id,
-        farm_id: layout.farm.id,
-        pen_feature_id: f.penFeatureId,
-        group_id: f.groupId,
-        occurred_at: new Date(f.occurredAtMs).toISOString(),
-        amount_kg: f.amountKg,
-        source: f.source,
-        confidence: f.confidence,
-        // The tell. A feed event carries no device, so without this it would
-        // be indistinguishable from a load a person logged.
-        recorded_by: SIMULATOR_ACTOR_ID,
-      })),
+      feed.map((f) => {
+        const occurredAt = new Date(f.occurredAtMs).toISOString();
+        return {
+          // IDEMPOTENT BY CONSTRUCTION. A plain insert here meant that
+          // re-running `--backfill` over a window already covered wrote a
+          // SECOND feeding for every window in it, and nothing downstream can
+          // tell a duplicated load from a real one — `measuredRate` and
+          // `alert_cond_days_on_hand_low` both just sum the rows. That is the
+          // shape of the defect migration 0020 corrected: 5,326 kg/day
+          // measured where 1,832 was fed. The id is a function of the farm,
+          // the pen and the instant, so a re-run merges onto itself.
+          id: uuidFrom(`feed:${layout.farm.id}:${f.penFeatureId}:${occurredAt}`),
+          org_id: layout.farm.org_id,
+          farm_id: layout.farm.id,
+          pen_feature_id: f.penFeatureId,
+          group_id: f.groupId,
+          occurred_at: occurredAt,
+          amount_kg: f.amountKg,
+          source: f.source,
+          confidence: f.confidence,
+          // The tell. A feed event carries no device, so without this it would
+          // be indistinguishable from a load a person logged.
+          recorded_by: SIMULATOR_ACTOR_ID,
+        };
+      }),
+      { onConflict: 'id', mergeDuplicates: true },
     );
     report.feedEvents += feed.length;
   }

@@ -12,6 +12,13 @@
 // calls a volume "metered". Water blue is still correct — the rule is
 // liquid measurement, and an uncalibrated meter reading is not a
 // projection (hay).
+//
+// The "Trough levels" card is the live trough reading the Telemetry Rail
+// used to carry on the right edge of every farm screen. The re-skin removed
+// the rail — correctly, a fixed strip cannot coexist with the mockup's
+// 100vh shell — and took the reading and its caveat with it. Both are back
+// here, in the mockup's own tile grid, with the sentence verbatim in the
+// dashed note. See ./trough-levels.ts for how the tile states are derived.
 
 import { notFound } from 'next/navigation';
 import {
@@ -54,6 +61,8 @@ import {
 import { lastNDayKeys } from '@/lib/ops/feed';
 import { dayLabel } from '@/lib/ops/tz';
 import { TroughTempChart, WaterPerHeadChart, type TempTraceRow, type WaterBarRow } from './water-charts';
+import { TroughLevelsLive } from './trough-levels-live';
+import { fetchTroughLevels } from './trough-query';
 
 const WINDOW_DAYS = 14;
 
@@ -87,6 +96,10 @@ export default async function WaterPage({ params }: { params: Promise<{ farmId: 
     fetchHerdData(supabase, farmId),
     fetchWaterEvents(supabase, farmId, since),
   ]);
+
+  // Live trough readings. Needs the feature index for pen names, so it runs
+  // after the batch above rather than inside it.
+  const troughLevels = await fetchTroughLevels(supabase, farmId, features);
 
   const days = lastNDayKeys(tz, WINDOW_DAYS);
   const daily = dailyByTrough(events, tz, days);
@@ -216,13 +229,16 @@ export default async function WaterPage({ params }: { params: Promise<{ farmId: 
     <Pad>
       {/* The bar owns navigation: Water is one of its four tabs, and Overview,
           Site Map and Feed & Forecast are the others. Movement is linked from
-          the farm overview. Nothing is repeated here. */}
+          the farm overview and from any pen's Gate activity card. Nothing is
+          repeated here. */}
       <PageHeader
         title="Water"
         sub={
           <>
-            {farm.name} · {tz} · last {WINDOW_DAYS} days · <b>{troughIds.length}</b> troughs
-            reporting · volumes are an <b>estimate</b>, the meter is not calibrated
+            {farm.name} · {tz} · last {WINDOW_DAYS} days ·{' '}
+            <b>{troughLevels.sensors.length}</b> trough sensors ·{' '}
+            <b>{troughIds.length}</b> on a water meter · volumes are an <b>estimate</b>, the
+            meter is not calibrated
           </>
         }
       />
@@ -258,7 +274,10 @@ export default async function WaterPage({ params }: { params: Promise<{ farmId: 
         />
         <Kpi
           accent="ok"
-          label="Troughs reporting"
+          // Counts troughs that reported a VOLUME — a water meter tied to a
+          // trough. Not the same number as the trough level sensors in the
+          // tiles below, and labelled so the two cannot be read as one.
+          label="Troughs on a water meter"
           value={troughIds.length}
           sub={
             quietTroughs.length > 0
@@ -268,8 +287,21 @@ export default async function WaterPage({ params }: { params: Promise<{ farmId: 
         />
       </KpiGrid>
 
+      {/* The live reading, and the caveat that makes it safe to show. This is
+          what the re-skin dropped with the Telemetry Rail. */}
+      <TroughLevelsLive
+        // Keyed so a move to another farm remounts rather than carrying the
+        // previous farm's readings into the new subscription.
+        key={farmId}
+        farmId={farmId}
+        sensors={troughLevels.sensors}
+        limits={troughLevels.limits}
+        alertedDeviceIds={troughLevels.alertedDeviceIds}
+        renderedAt={troughLevels.renderedAt}
+      />
+
       <Card
-        title="Troughs"
+        title="Water drawn today, by trough"
         sub="today so far"
         aside={
           <Legend>
@@ -281,9 +313,8 @@ export default async function WaterPage({ params }: { params: Promise<{ farmId: 
         padded={false}
         note={
           <>
-            <b>No fill level.</b> Turning a trough sensor into a percent full needs the trough
-            measured and a calibration set for that sensor; none exists on this farm, so these
-            tiles carry the volume drawn today and not a level. The volume itself is an{' '}
+            <b>Volume, not level.</b> These tiles carry the water drawn since midnight; the live
+            reading is in Trough levels above. The volume is an{' '}
             <b>estimate · meter not calibrated</b> — a pulse count times a litres-per-pulse
             factor nobody has checked against a real meter.
           </>
@@ -324,8 +355,8 @@ export default async function WaterPage({ params }: { params: Promise<{ farmId: 
               )}
               {drawdownCount > 0 && (
                 <>
-                  Includes {drawdownCount} level-drawdown readings — inferred from tank level,
-                  not metered pulses.{' '}
+                  Includes {drawdownCount} level-drawdown readings — inferred from a falling
+                  tank level rather than counted at the meter.{' '}
                 </>
               )}
               Volumes are an <b>estimate · meter not calibrated</b>.

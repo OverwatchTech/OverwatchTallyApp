@@ -4,17 +4,22 @@ Ingest edge function: Milesight Development Platform → Supabase. Implements
 every hard requirement in `docs/ARCHITECTURE.md` §5. `service_role` is
 permitted here — one of exactly two places (CLAUDE.md #9).
 
-Route: `POST /mdp-webhook/{farm_token}` — the token is the per-farm path
-secret (`farms.webhook_token`), the compensating control for MDP webhooks
-carrying no signature.
+Route: `POST /mdp-webhook` — **no token in the URL**. The request is
+authenticated by MDP's signature headers and nothing else (migration 0022; see
+"Why the token left the URL" below). `POST /mdp-webhook/{farm_token}` still
+routes so that callback URIs already saved in the MDP console keep working,
+but the trailing token is ignored for authorisation.
 
 ## Pipeline (one request)
 
 ```
-POST /{token}
-  → token shape check → rate limit (per token, per isolate)
+POST /mdp-webhook
+  → signature headers present?       (missing → 401, empty body)
+  → timestamp within ±300 s          (stale → 401)
+  → rate limit (per webhook UUID, per isolate)
   → parse + validate envelope        (no DB touched yet)
-  → resolve farm by webhook_token    (unknown → 404, empty body)
+  → resolve farm by webhook UUID     (unknown → 401, empty body)
+  → verify HMAC-SHA256(secret, ts‖nonce)   (bad → 401)
   → dedup: insert eventID into ingest_event_ids ON CONFLICT DO NOTHING
       conflict → replay → 200        (retries are expected, not errors)
   → persist raw envelope to raw_events (status 'pending')
@@ -33,11 +38,14 @@ Responses always have an **empty body** — request contents are never echoed.
 |---|---|
 | 200 | accepted, or replay of an already-seen eventID |
 | 400 | malformed envelope (reason code in logs only) |
-| 404 | unknown or ill-shaped token / path |
+| 401 | not authenticated — missing headers, unknown webhook UUID, stale timestamp, or bad MAC. **All four look identical from outside**, on purpose: the endpoint must not be an oracle for which farms exist. |
 | 405 | not POST |
 | 413 | body over 256 KB |
-| 429 | over the per-token rate limit |
+| 429 | over the per-webhook-UUID rate limit |
 | 500 | raw persist failed — MDP should retry; the dedup slot is released |
+
+There is no 404. It used to mean "unknown token", which distinguished a real
+farm from an invented one for anyone probing the endpoint.
 
 ## Deploy
 
@@ -46,14 +54,16 @@ supabase functions deploy mdp-webhook --project-ref lropxenygvybctvaspxm --no-ve
 ```
 
 `--no-verify-jwt` is required: MDP cannot send an Authorization header. The
-path token is the auth (that is the §5.1 design).
+MDP signature headers are the auth.
 
 ### Secrets
 
 None to set manually. The platform injects `SUPABASE_URL` and
 `SUPABASE_SERVICE_ROLE_KEY` into every edge function; those two are all this
-function reads. Nothing is committed, nothing is logged (webhook tokens
-appear in logs only as a 6-char prefix).
+function reads. Nothing is committed. The HMAC key
+(`mdp_webhook_credentials.webhook_secret`) is never logged in any form, and
+the webhook UUID — the routing and rate-limit key — is logged only as a 6-char
+prefix.
 
 ### Pre-deploy checklist
 
@@ -70,23 +80,84 @@ appear in logs only as a 6-char prefix).
    alert — visible in the DLQ, nothing lost, but migrate before go-live.
 3. At least one `devices` row per (virtual) device, with `dev_eui` matching
    what MDP will send — unknown devEUIs are dropped by design.
-4. In the farm's MDP Application, set the webhook callback URI to
-   `https://<project-ref>.supabase.co/functions/v1/mdp-webhook/<webhook_token>`.
+4. **The farm has a row in `mdp_webhook_credentials`.** Without it every
+   delivery is a 401. Paste the Application's webhook UUID and Secret into
+   `/admin/farms/<farm_id>` → "Webhook signing material" *before* enabling the
+   callback in MDP.
+5. In the farm's MDP Application, set the webhook callback URI to
+   `https://<project-ref>.supabase.co/functions/v1/mdp-webhook` — no trailing
+   token.
 
-## Token rotation
+## Why the token left the URL
 
-`farms.webhook_token` (48 hex chars from `gen_random_bytes(24)`, unique) is a
-secret. Rotation (admin console action — Phase 7; SQL until then):
+Migration 0022. The function was always careful with the per-farm path token:
+`redact()` puts a 6-character prefix in the log and nothing more. Supabase's
+own platform log line cannot be careful, because it records the request URL:
 
-1. `update farms set webhook_token = encode(extensions.gen_random_bytes(24), 'hex') where id = '<farm>' returning webhook_token;`
-2. Update the callback URI in the farm's MDP Application settings.
+```
+POST | 200 | https://<project>.supabase.co/functions/v1/mdp-webhook/<the whole token>
+```
 
-Between 1 and 2 deliveries 404. The window is seconds when done back-to-back;
-MDP retries failures and escalates repeated failure to `SYSTEM_MESSAGES`,
-which this function turns into a staff alert — so a botched rotation is
-self-announcing. A zero-drop rotation (two valid tokens overlapping, using
-MDP's 2–5 webhook URI slots per Application) needs a second token column —
-recorded in `docs/ROADMAP.md` territory, not v1.
+So every invocation wrote the token, in full, into the edge-function log. Log
+access is granted far more widely than credential access. That gave anyone who
+could read logs two things:
+
+- **injection**, for any farm with no signing material stored — the function
+  used to accept unsigned deliveries in that state so a half-provisioned
+  install would not drop real readings;
+- **denial of ingest**, for *every* farm — the rate limiter was keyed on the
+  token, so 300 forged requests a minute exhausted a real farm's budget,
+  pushed MDP into retry-then-`SYSTEM_MESSAGES`, and destroyed telemetry inside
+  MDP's one-day retention window. No credential required.
+
+The fix is to authenticate on something that is never in a URL. MDP signs
+every delivery (`signature.ts`, discovered 2026-08-03 against a live callback
+and confirmed on the MDP console's own Test button):
+
+| Header | Role now |
+|---|---|
+| `x-msc-webhook-uuid` | **resolves the farm** — unique in `mdp_webhook_credentials`; also the rate-limit key |
+| `x-msc-request-timestamp` | ±300 s freshness window, checked before any I/O |
+| `x-msc-request-nonce` | signed alongside the timestamp |
+| `x-msc-request-signature` | `HMAC-SHA256(webhook_secret, timestamp ‖ nonce)`, constant-time compared |
+
+None of the four are in the URL, so none reach a platform log line.
+
+**What this costs, stated plainly.** The signature covers timestamp and nonce,
+not the body — it authenticates the *sender*, not the *message* (see the
+HONEST LIMIT block in `signature.ts`). The remaining work is done by the
+freshness window, `eventId` idempotency, and TLS. Losing the path token loses
+nothing here, because the token was strictly weaker: it was a bearer secret
+that also did not cover the body, and it was published to the log on every
+request.
+
+**What it also buys.** Rotating `farms.webhook_token` no longer interrupts
+anything, because nothing checks it — the "token rotation always has a lossy
+window" gap in `docs/RUNBOOK-INGEST.md` §8 is closed by deletion. The rotate
+button is gone from the admin console for the same reason: it did nothing.
+
+### Options considered and rejected
+
+- **Move the token to a request header.** Dead on arrival: MDP's console
+  offers a callback URI and nothing else — it cannot even send
+  `Authorization`, which is why the function deploys `--no-verify-jwt`.
+- **Keep the token and rotate it on a schedule.** It would still be published
+  to the log on every invocation between rotations, and rotation cannot
+  outrun a log reader. This only works if you also declare log access to be
+  credential access, which is the thing being fixed.
+
+### Migrating a live farm
+
+Both URI shapes work, so there is no outage and no ordering requirement:
+
+1. Confirm `mdp_webhook_credentials` has a row for the farm (`/admin/farms/<id>`).
+2. In MDP → Application → Webhook, replace the callback URI with the tokenless
+   one shown on that screen.
+3. Press Test. A `WEBHOOK_TEST` row appears in `raw_events` with
+   `status = 'ignored'` — that is success.
+
+Until step 2 happens the function logs `legacy_token_url` once per farm per
+isolate, naming the farm. That is how you find the consoles nobody re-pointed.
 
 ## SYSTEM_MESSAGES routing (staff-only, permanently)
 
@@ -100,7 +171,7 @@ exclude `details->>'staff_only' = 'true'`.
 
 ## Rate limiting — known limitation
 
-Sliding window, 300 events/min per token, **in-memory per isolate**. Supabase
+Sliding window, 300 events/min per webhook UUID, **in-memory per isolate**. Supabase
 runs N isolates and recycles them, so the real ceiling is 300 × isolates and
 resets on cold start. Acceptable for Phase 4: the limiter is an abuse damper,
 not an integrity control (dedup + RLS hold that line). A durable limiter
@@ -122,9 +193,11 @@ mappings exist.
 **Ingest ends at `readings` and `device_health.online`.** Everything derived
 from a *series* of readings — water volume from `pulse_count`, gate
 transitions from `gate_state`, `battery_pct` propagation onto `devices` /
+`device_health`, and `last_seen_at` propagation onto `devices` /
 `device_health` — happens in
-`packages/db/migrations/0017_event_derivation.sql`, on the `ot_derive_events`
-pg_cron job (`1-59/5`), not here.
+`packages/db/migrations/0017_event_derivation.sql` and
+`0021_alert_reliability.sql`, on the `ot_derive_events` pg_cron job
+(`1-59/5`), not here.
 
 That is a deliberate trade, and the reason is measured, not assumed:
 
@@ -141,10 +214,26 @@ That is a deliberate trade, and the reason is measured, not assumed:
 - Cost of the trade: the water screen is up to ~5 minutes behind live. It
   buckets by day. Five minutes is invisible there.
 
-So: do **not** add a `water_events` / `gate_events` / `battery_pct` write to
-`normalizeDeviceData`. If derivation ever has to be closer to real time,
-tighten the cron schedule — the derivation functions are idempotent and a
-re-run over an overlapping window is a no-op.
+So: do **not** add a `water_events` / `gate_events` / `battery_pct` /
+`last_seen_at` write to `normalizeDeviceData`. If derivation ever has to be
+closer to real time, tighten the cron schedule — the derivation functions are
+idempotent and a re-run over an overlapping window is a no-op.
+
+### The `device_health` upsert is guarded in the database, not here
+
+`normalizeDeviceData` upserts `device_health` on every ONLINE/OFFLINE push and
+stamps `last_online_change_at = received_at` unconditionally. That is wrong on
+a re-push of the *same* state: the grace clock behind `sensor_offline`'s
+`after_minutes` restarts, and a sensor MDP keeps re-reporting as OFFLINE never
+trips the alert. Reading the row first to find out whether the state changed
+would cost a third round-trip per envelope, so the rule lives in a
+`before update` trigger instead — `app.device_health_guard`, migration 0021:
+
+- `last_online_change_at` moves **only** when `online` actually changes;
+- `last_seen_at` and `battery_as_of` are forward-only and cannot be rewound by
+  a backfill, a replay, or a late delivery.
+
+The upsert here stays exactly as it is. Do not try to make it conditional.
 
 ## Verify
 

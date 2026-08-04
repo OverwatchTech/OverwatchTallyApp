@@ -9,7 +9,6 @@ import { Field, FormNote, buttonClass, inputClass } from '../../console-ui';
 import { MIN_REASON_LENGTH } from '@/lib/admin/impersonation';
 import {
   registerDevicesWithMdp,
-  rotateWebhookToken,
   saveApiCredentials,
   saveApplication,
   saveWebhookCredentials,
@@ -135,28 +134,11 @@ export function WebhookCredentialsForm({ farmId }: { farmId: string }) {
   );
 }
 
-export function RotateTokenForm({ farmId }: { farmId: string }) {
-  const [state, formAction, pending] = useActionState(rotateWebhookToken, IDLE);
-
-  return (
-    <form action={formAction} className="ow-form">
-      <input type="hidden" name="farmId" value={farmId} />
-      <Field label="Why" hint={reasonHint}>
-        <input name="reason" required minLength={MIN_REASON_LENGTH} className={inputClass} />
-      </Field>
-      <div className="ow-inline">
-        <button type="submit" disabled={pending} className={buttonClass()}>
-          {pending ? 'Rotating…' : 'Rotate path token'}
-        </button>
-        <FormNote status={state.status} message={state.message} />
-      </div>
-      <p className="ow-quiet ow-wrong">
-        Ingest for this farm stops the moment this changes and stays down until the new callback URI
-        is saved in the MDP console. Nothing that arrives in between is recoverable.
-      </p>
-    </form>
-  );
-}
+// RotateTokenForm was removed with migration 0022. The path token no longer
+// authenticates anything, so a button offering to rotate it would have told
+// staff they had re-secured an endpoint they had not touched. Rotating the
+// credential that IS checked means rotating the webhook Secret in the MDP
+// console and storing it through WebhookCredentialsForm above.
 
 export function RegisterDevicesForm({ farmId, pending: count }: { farmId: string; pending: number }) {
   const [state, formAction, submitting] = useActionState(registerDevicesWithMdp, IDLE);

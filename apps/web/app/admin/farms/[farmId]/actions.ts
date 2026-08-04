@@ -11,7 +11,7 @@ import { revalidatePath } from 'next/cache';
 import { withAudit } from '@/lib/admin/audit';
 import { requireStaffAction } from '@/lib/admin/guard';
 import { upsertAppCredentials, upsertWebhookCredentials } from '@/lib/admin/db-extras';
-import { loadApiCredentials, newWebhookToken } from '@/lib/admin/provisioning';
+import { loadApiCredentials } from '@/lib/admin/provisioning';
 import { MdpClient } from '@/lib/admin/mdp/client';
 import { budgetRecorder } from '@/lib/admin/mdp/budget';
 import { fail, field, ok, type ActionState } from '@/lib/admin/action-state';
@@ -124,12 +124,20 @@ export async function saveWebhookCredentials(
   formData: FormData,
 ): Promise<ActionState> {
   const farmId = field(formData, 'farmId');
-  const webhookUuid = field(formData, 'webhookUuid');
+  // Canonicalised before it is stored, and validated against the same shape
+  // the edge function's header validator enforces. Since migration 0022 this
+  // value is the ROUTING key — the farm is resolved by an exact match on it —
+  // so a pasted uppercase or space-padded uuid would 401 every delivery for
+  // this farm with nothing on screen to explain why.
+  const webhookUuid = field(formData, 'webhookUuid').trim().toLowerCase();
   const webhookSecret = field(formData, 'webhookSecret');
   const reason = field(formData, 'reason');
 
   if (!UUID.test(farmId)) return fail('Pick a farm.');
   if (!webhookUuid || !webhookSecret) return fail('Both the webhook id and the secret are needed.');
+  if (!/^[0-9a-f-]{8,64}$/.test(webhookUuid)) {
+    return fail('The webhook id should look like the uuid MDP shows on the Application webhook.');
+  }
 
   const orgId = await orgOf(farmId);
 
@@ -157,43 +165,12 @@ export async function saveWebhookCredentials(
   return ok('Signing material stored.');
 }
 
-/**
- * Rotate the per-farm path token. This one IS ours to rotate (§5.1) — and
- * rotating it breaks ingest for this farm until the new callback URI is saved
- * in the MDP console, which is why the message says so.
- */
-export async function rotateWebhookToken(
-  _prev: ActionState,
-  formData: FormData,
-): Promise<ActionState> {
-  const farmId = field(formData, 'farmId');
-  const reason = field(formData, 'reason');
-  if (!UUID.test(farmId)) return fail('Pick a farm.');
-
-  const orgId = await orgOf(farmId);
-
-  const result = await withAudit<{ id: string }>(
-    {
-      action: 'farms.webhook_token.rotate',
-      table: 'farms',
-      orgId,
-      farmId,
-      recordId: farmId,
-      reason,
-    },
-    async (supabase) =>
-      supabase
-        .from('farms')
-        .update({ webhook_token: newWebhookToken() })
-        .eq('id', farmId)
-        .select('id')
-        .single(),
-  );
-
-  if (!result.ok) return fail(result.error);
-  revalidatePath(`/admin/farms/${farmId}`);
-  return ok('Token rotated. Ingest for this farm is down until the new URI is saved in MDP.');
-}
+// `rotateWebhookToken` used to live here. It is gone, not disabled: after
+// migration 0022 the webhook does not read `farms.webhook_token` when deciding
+// whether to accept a delivery, so rotating it protected nothing while telling
+// the operator it had. The credential that is actually checked is the webhook
+// Secret, rotated in the MDP console and stored through
+// `saveWebhookCredentials` above.
 
 /**
  * Register this farm's unregistered devices with MDP.

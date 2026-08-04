@@ -24,7 +24,7 @@ export interface FarmProvisioning {
   timezone: string;
   mdpApplicationId: string | null;
   mdpGroupId: string | null;
-  webhookToken: string;
+  /** Tokenless. See webhookCallbackUri. */
   callbackUri: string;
   /** Webhook signing material (0010). Secret is never returned in the clear. */
   webhook: { uuid: string; secretMasked: string; rotatedAt: string } | null;
@@ -45,14 +45,24 @@ export interface FarmProvisioning {
 }
 
 /**
- * The callback URI to paste into the MDP console. The token is a secret
- * (ARCHITECTURE §5.1) — it is shown here because staff have to type it into
- * Milesight, and nowhere else.
+ * The callback URI to paste into the MDP console. It carries no token and no
+ * secret of any kind, and it is the same for every farm.
+ *
+ * It used to end in `farms.webhook_token`, which was the endpoint's primary
+ * authentication. Supabase's platform edge log records the full request URL,
+ * so that token was written to the log on every single delivery — anyone with
+ * log access had endpoint access. Migration 0022 moved authentication onto
+ * MDP's signature headers, which never appear in a URL. The farm is now
+ * resolved from `x-msc-webhook-uuid`, so the URL has nothing left to carry.
+ *
+ * Old token-bearing URIs still route, so consoles that have not been
+ * re-pointed keep working; the edge function logs `legacy_token_url` naming
+ * the farm until they are.
  */
-export function webhookCallbackUri(token: string): string {
+export function webhookCallbackUri(): string {
   const base = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/+$/, '');
-  if (!base) return `«set NEXT_PUBLIC_SUPABASE_URL»/functions/v1/mdp-webhook/${token}`;
-  return `${base}/functions/v1/mdp-webhook/${token}`;
+  if (!base) return '«set NEXT_PUBLIC_SUPABASE_URL»/functions/v1/mdp-webhook';
+  return `${base}/functions/v1/mdp-webhook`;
 }
 
 export async function readFarmProvisioning(
@@ -61,7 +71,7 @@ export async function readFarmProvisioning(
 ): Promise<FarmProvisioning | null> {
   const { data: farm } = await supabase
     .from('farms')
-    .select('id, name, org_id, status, timezone, mdp_application_id, mdp_group_id, webhook_token')
+    .select('id, name, org_id, status, timezone, mdp_application_id, mdp_group_id')
     .eq('id', farmId)
     .maybeSingle();
   if (!farm) return null;
@@ -82,8 +92,7 @@ export async function readFarmProvisioning(
     timezone: farm.timezone,
     mdpApplicationId: farm.mdp_application_id,
     mdpGroupId: farm.mdp_group_id,
-    webhookToken: farm.webhook_token,
-    callbackUri: webhookCallbackUri(farm.webhook_token),
+    callbackUri: webhookCallbackUri(),
     webhook: webhookResult.data
       ? {
           uuid: webhookResult.data.webhook_uuid,
@@ -122,9 +131,12 @@ export async function loadApiCredentials(
   };
 }
 
-/** A fresh path token. 48 hex characters, matching the column default. */
-export function newWebhookToken(): string {
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
+// There is deliberately no `newWebhookToken` here any more. Rotating
+// `farms.webhook_token` did nothing after migration 0022 — the webhook does
+// not read it for authorisation — so a "Rotate path token" button would have
+// been a control that claimed to protect the endpoint and did not. The column
+// keeps its database default for old callback URIs; nothing in the product
+// mints a new one. Re-establishing trust after a suspected compromise means
+// rotating the webhook Secret in the MDP console and pasting it into
+// "Webhook signing material" above, which is the credential that is actually
+// checked.
