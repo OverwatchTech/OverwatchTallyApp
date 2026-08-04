@@ -67,7 +67,16 @@ function customerMessage(alert: QueuedAlert): RenderedMessage {
 
   switch (alert.kind) {
     case 'trough_low': {
-      const level = num(d, 'level_mm');
+      // `reading_mm` first, `level_mm` second. The trough condition was fixed
+      // to read distance_mm (what ultrasonic and radar sensors actually emit)
+      // rather than level_mm (which only the submersible reports, with the
+      // opposite sense), and it renamed the details field on the way through.
+      // This renderer was still reading the old name, and because the number
+      // is optional in the sentence it did not break — it just quietly sent
+      // "the trough is reading low" with no measurement in it. An alert
+      // stripped of its evidence is one a rancher cannot act on or argue with.
+      // The fallback keeps alerts opened before that migration readable.
+      const level = num(d, 'reading_mm') ?? num(d, 'level_mm');
       return {
         subject: `Water low at ${place}`,
         body:
