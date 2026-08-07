@@ -122,17 +122,53 @@ export interface DeliveryResult {
  * POSTs one batch to the deployed edge function — the same URL and the same
  * headers a real MDP callback uses. A non-2xx is the simulator's problem to
  * fix, not the webhook's (unless the webhook is genuinely wrong).
+ *
+ * RETRIES THE SOCKET, NEVER THE VERDICT. `--live` is meant to run unattended
+ * for days keeping the demo farm alive; a bare fetch here ended a 235-round
+ * run on a single `TypeError: fetch failed` after 39 hours of ranch time, and
+ * the farm went dark until somebody noticed. `pg.ts` already had this and the
+ * delivery path did not.
+ *
+ * The rule is the same one the RLS suite's transport wrapper uses: retry ONLY
+ * when fetch rejected — no response arrived, so there is no answer to
+ * misrepresent. **Any response is returned untouched, whatever its status.**
+ * A 401 or a 400 from the webhook is the signal that the simulator is building
+ * the wrong request, which is exactly what this tool exists to surface; hiding
+ * it behind a retry would turn the fleet into a liar about the ingest path.
+ *
+ * Signing happens per attempt, not once. The signature covers a timestamp and
+ * a nonce with a 300-second freshness window, so a stale header set replayed
+ * after backoff would be rejected on its own merits.
  */
+const DELIVER_ATTEMPTS = 4;
+
 export async function deliver(
   url: string,
   envelopes: readonly MdpEnvelope[],
   credentials: { webhook_uuid: string; webhook_secret: string } | null,
 ): Promise<DeliveryResult> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: signedHeaders(credentials),
-    body: JSON.stringify(envelopes),
-  });
-  await res.body?.cancel();
-  return { status: res.status, count: envelopes.length };
+  let lastError: unknown;
+  for (let attempt = 0; attempt < DELIVER_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 400 * 2 ** (attempt - 1)));
+    }
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: signedHeaders(credentials),
+        body: JSON.stringify(envelopes),
+      });
+      await res.body?.cancel();
+      return { status: res.status, count: envelopes.length };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  // Out of attempts: the network is genuinely gone. Say which call died and
+  // why rather than surfacing a bare "fetch failed" with no context.
+  const cause = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(
+    `deliver: ${DELIVER_ATTEMPTS} attempts failed posting ${envelopes.length} envelope(s) — ${cause}`,
+    { cause: lastError },
+  );
 }
